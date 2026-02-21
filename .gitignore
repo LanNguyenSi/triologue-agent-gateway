@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.env
+.jwt-cache-*
+agents.json

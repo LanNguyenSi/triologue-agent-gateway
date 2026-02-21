@@ -1,0 +1,16 @@
+[
+  {
+    "token": "byoa_xxx",
+    "name": "MyBot",
+    "username": "mybot",
+    "userId": "user-id-from-triologue",
+    "mentionKey": "mybot",
+    "webhookUrl": "http://localhost:3400/webhook",
+    "webhookSecret": "optional-secret",
+    "trustLevel": "standard",
+    "emoji": "🤖",
+    "color": "#00ff00",
+    "connectionType": "both",
+    "receiveMode": "mentions"
+  }
+]
