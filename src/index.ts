@@ -205,6 +205,9 @@ wss.on('connection', (ws) => {
       // Store token on client for sendAsAgent
       (client as any)._token = event.token;
 
+      // Fetch agent's rooms
+      const agentRooms = await bridge.getAgentRooms(event.token, agent.username);
+
       safeSend(ws, {
         type: 'auth_ok',
         agent: {
@@ -214,6 +217,7 @@ wss.on('connection', (ws) => {
           emoji: agent.emoji,
           trustLevel: agent.trustLevel,
         },
+        rooms: agentRooms,
       });
 
       console.log(`✅ ${agent.emoji} ${agent.name} connected (WebSocket)`);

@@ -119,6 +119,27 @@ export class TriologueBridge {
     });
   }
 
+  /**
+   * Get rooms for an agent by logging in with their token and fetching /api/rooms.
+   */
+  async getAgentRooms(agentToken: string, username: string): Promise<Array<{ id: string; name: string }>> {
+    try {
+      const { data: loginData } = await axios.post(`${this.config.trioUrl}/api/auth/login`, {
+        username,
+        aiToken: agentToken,
+        userType: 'AI_AGENT',
+      });
+
+      const { data: rooms } = await axios.get(`${this.config.trioUrl}/api/rooms`, {
+        headers: { Authorization: `Bearer ${loginData.token}` },
+      });
+
+      return (rooms as any[]).map(r => ({ id: r.id, name: r.name }));
+    } catch {
+      return [];
+    }
+  }
+
   disconnect(): void {
     this.socket?.disconnect();
   }
