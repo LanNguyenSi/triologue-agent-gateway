@@ -12,17 +12,15 @@ const lastExchange = new Map<string, number>();
 const exchangeCount = new Map<string, { count: number; reset: number }>();
 
 export function shouldDeliver(
-  targetTrust: 'standard' | 'elevated',
+  _targetTrust: 'standard' | 'elevated',
   senderIsAgent: boolean,
   senderId: string,
   targetId: string,
 ): boolean {
-  // Standard agents: no agent messages
-  if (targetTrust === 'standard' && senderIsAgent) return false;
-
   // Self-loop: never
   if (senderId === targetId) return false;
 
+  // Agent-to-agent: allowed, but with cooldowns to prevent infinite loops
   if (senderIsAgent) {
     const pair = [senderId, targetId].sort().join('↔');
     const now = Date.now();
