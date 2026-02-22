@@ -16,6 +16,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAgentByUsername } from './auth';
 import { TriologueBridge } from './triologue-bridge';
 import { shouldDeliver } from './loop-guard';
+import { injectToSession } from './openclaw-inject';
 import type { AgentInfo, WsClient } from './types';
 
 // ── Config ──
@@ -90,7 +91,7 @@ bridge.onMessage((msg) => {
     });
   }
 
-  // ── Webhook agents: dispatch on @mention ──
+  // ── Non-WebSocket agents: dispatch on @mention via webhook or openclaw-inject ──
   for (const agent of getWebhookAgents()) {
     if (agent.username === msg.senderUsername) continue;
     if (!shouldDeliver(agent.trustLevel, senderIsAgent, msg.senderUsername, agent.username)) continue;
@@ -98,8 +99,20 @@ bridge.onMessage((msg) => {
     const mentioned = msg.content.toLowerCase().includes(`@${agent.mentionKey}`);
     if (!mentioned) continue;
 
-    // Don't webhook if agent is connected via WebSocket (already got it)
+    // Don't dispatch if agent is connected via WebSocket (already got it)
     if (clients.has(agent.userId)) continue;
+
+    // ── OpenClaw inject: inject directly into local OpenClaw session ──
+    if (agent.delivery === 'openclaw-inject') {
+      const injectMsg = `[Triologue:${msg.roomId}] ${msg.senderUsername}: ${msg.content}\n\n(Reply to this room: ROOM_ID=${msg.roomId})`;
+      injectToSession(injectMsg)
+        .then(() => console.log(`[openclaw-inject:${agent.mentionKey}] ✅`))
+        .catch(err => console.warn(`[openclaw-inject:${agent.mentionKey}] ⚠️ ${err.message}`));
+      continue;
+    }
+
+    // ── Standard webhook dispatch ──
+    if (!agent.webhookUrl) continue;
 
     const payload = JSON.stringify({
       messageId: msg.id,
@@ -110,7 +123,7 @@ bridge.onMessage((msg) => {
       timestamp: msg.timestamp,
     });
 
-    fetch(agent.webhookUrl!, {
+    fetch(agent.webhookUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

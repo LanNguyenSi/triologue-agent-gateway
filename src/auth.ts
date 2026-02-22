@@ -24,6 +24,7 @@ interface AgentConfig {
   color?: string;
   connectionType?: 'webhook' | 'websocket' | 'both';
   receiveMode?: 'mentions' | 'all';
+  delivery?: 'webhook' | 'openclaw-inject';
 }
 
 // ── Load agent registry ──
@@ -62,6 +63,7 @@ export function buildTokenIndex(): void {
       color: a.color ?? null,
       connectionType: a.connectionType ?? 'both',
       receiveMode: a.receiveMode ?? 'mentions',
+      delivery: a.delivery ?? 'webhook',
     });
   }
 }
@@ -80,7 +82,7 @@ export function getAgentByUsername(username: string): AgentInfo | null {
 export function getWebhookAgents(): AgentInfo[] {
   return [...tokenMap.values()].filter(
     a => a.connectionType === 'webhook' || a.connectionType === 'both'
-  ).filter(a => a.webhookUrl);
+  ).filter(a => a.webhookUrl || a.delivery === 'openclaw-inject');
 }
 
 export function getAllAgents(): AgentInfo[] {
