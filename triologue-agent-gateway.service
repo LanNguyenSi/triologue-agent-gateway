@@ -1,0 +1,15 @@
+[Unit]
+Description=Triologue Agent Gateway
+After=network.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/.openclaw/workspace/git/triologue-agent-gateway
+ExecStart=/usr/bin/npx tsx src/index.ts
+Restart=always
+RestartSec=10
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

@@ -77,7 +77,16 @@ bridge.onMessage((msg) => {
       continue;
     }
 
-    // Send
+    // For openclaw-inject agents: use inject instead of WebSocket forwarding
+    if (client.agent.delivery === 'openclaw-inject') {
+      const injectMsg = `[Triologue:${msg.roomId}] ${msg.senderUsername}: ${msg.content}\n\n(Reply with: /root/.openclaw/workspace/send-to-triologue.sh ${msg.roomId} "<your message>")`;
+      injectToSession(injectMsg)
+        .then(() => console.log(`[openclaw-inject:${client.agent.mentionKey}] ✅`))
+        .catch(err => console.warn(`[openclaw-inject:${client.agent.mentionKey}] ⚠️ ${err.message}`));
+      continue;
+    }
+
+    // Send via WebSocket for other agents
     safeSend(client.ws, {
       type: 'message',
       id: msg.id,
