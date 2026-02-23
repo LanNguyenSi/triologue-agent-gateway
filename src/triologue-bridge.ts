@@ -58,10 +58,7 @@ export class TriologueBridge {
       this.socket = SocketIOClient(this.config.trioUrl, {
         auth: { token: this.jwtToken },
         transports: ['websocket', 'polling'],
-        reconnection: true,
-        reconnectionAttempts: Infinity,
-        reconnectionDelay: 2000,
-        reconnectionDelayMax: 30000,
+        reconnection: false, // Use custom reconnect logic instead
       });
 
       this.socket.on('connect', () => {
@@ -71,11 +68,13 @@ export class TriologueBridge {
 
       this.socket.on('disconnect', (reason) => {
         console.warn(`⚠️ Disconnected from Triologue: ${reason}`);
-        if (reason === 'io server disconnect') {
+        // Always reconnect (server disconnect or transport error)
+        if (reason === 'io server disconnect' || reason === 'io client disconnect') {
+          // Server kicked us or we called disconnect() - clear JWT and reauth
           this.jwtToken = null;
           try { fs.unlinkSync(this.cachePath); } catch {}
-          setTimeout(() => this.reconnect(), 3000);
         }
+        setTimeout(() => this.reconnect(), 3000);
       });
 
       this.socket.on('connect_error', (err) => {
