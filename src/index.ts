@@ -72,7 +72,7 @@ bridge.onMessage(async (msg) => {
     if (client.agent.userId === msg.senderId) continue;
 
     // receiveMode check (before loop guard — @mentions always get through)
-    const mentioned = msg.content.toLowerCase().includes(`@${client.agent.mentionKey}`);
+    const mentioned = msg.content.toLowerCase().includes(`@${client.agent.mentionKey}`) || msg.content.toLowerCase().includes(`@${client.agent.username}`);
     if (client.agent.receiveMode === 'mentions' && !mentioned) continue;
 
     // Loop guard (skip for direct @mentions — user explicitly wants this agent)
@@ -132,7 +132,8 @@ bridge.onMessage(async (msg) => {
     if (agent.username === msg.senderUsername) continue;
     if (!shouldDeliver(agent.trustLevel, senderIsAgent, msg.senderUsername, agent.username)) continue;
 
-    const mentioned = msg.content.toLowerCase().includes(`@${agent.mentionKey}`);
+    const lc = msg.content.toLowerCase();
+    const mentioned = lc.includes(`@${agent.mentionKey}`) || lc.includes(`@${agent.username}`);
     if (!mentioned) continue;
 
     // Don't dispatch if agent is connected via WebSocket (already got it)
