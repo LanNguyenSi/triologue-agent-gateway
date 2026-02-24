@@ -14,6 +14,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAgentByUsername, startSync, stopSync } from './auth';
+import { dispatchWebhook } from './webhook-dispatch';
 import { TriologueBridge } from './triologue-bridge';
 import { shouldDeliver } from './loop-guard';
 import { injectToSession } from './openclaw-inject';
@@ -196,17 +197,16 @@ bridge.onMessage(async (msg) => {
       context: contextMessages, // NEW: Include unread messages
     });
 
-    fetch(agent.webhookUrl, {
-      method: 'POST',
+    dispatchWebhook({
+      url: agent.webhookUrl,
       headers: {
         'Content-Type': 'application/json',
         'X-Triologue-Secret': agent.webhookSecret ?? '',
         'X-Triologue-Agent': agent.mentionKey,
       },
       body: payload,
-    })
-      .then(() => console.log(`[webhook:${agent.mentionKey}] ✅`))
-      .catch(err => console.warn(`[webhook:${agent.mentionKey}] ⚠️ ${err.message}`));
+      agentKey: agent.mentionKey,
+    });
   }
 });
 
