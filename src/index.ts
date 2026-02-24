@@ -17,6 +17,7 @@ import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAg
 import { TriologueBridge } from './triologue-bridge';
 import { shouldDeliver } from './loop-guard';
 import { injectToSession } from './openclaw-inject';
+import { loadReadTracker, getLastSeenMessageId, markMessageSeen } from './read-tracker';
 import type { AgentInfo, WsClient } from './types';
 
 // ── Config ──
@@ -31,10 +32,11 @@ if (!GATEWAY_TOKEN) {
   process.exit(1);
 }
 
-// ── Load agents ──
+// ── Load agents & read tracker ──
 
 loadAgents();
 buildTokenIndex();
+loadReadTracker();
 
 // ── Express ──
 
@@ -57,7 +59,7 @@ const bridge = new TriologueBridge({
 
 // ── Message routing: Triologue → Agents ──
 
-bridge.onMessage((msg) => {
+bridge.onMessage(async (msg) => {
   console.log(`📨 ${msg.senderUsername} (${msg.senderType}) in ${msg.roomId}: ${msg.content.slice(0, 60)}`);
   const senderIsAgent = msg.senderType === 'ai';
   const senderAgent = getAgentByUsername(msg.senderUsername);
@@ -79,9 +81,33 @@ bridge.onMessage((msg) => {
 
     // For openclaw-inject agents: use inject instead of WebSocket forwarding
     if (client.agent.delivery === 'openclaw-inject') {
-      const injectMsg = `[Triologue:${msg.roomId}] ${msg.senderUsername}: ${msg.content}\n\n(Reply with: /root/.openclaw/workspace/send-to-triologue.sh ${msg.roomId} "<your message>")`;
+      // Fetch unread messages if this is a mention
+      let contextMessages: string[] = [];
+      if (mentioned) {
+        const lastSeenId = getLastSeenMessageId(client.agent.userId, msg.roomId);
+        if (lastSeenId) {
+          const token = (client as any)._token;
+          if (token) {
+            const unreadMessages = await bridge.fetchMessagesSince(token, msg.roomId, lastSeenId, 50);
+            // Format unread messages as context (exclude the current one)
+            contextMessages = unreadMessages
+              .filter(m => m.id !== msg.id)
+              .map(m => `[${m.sender?.username || 'unknown'}]: ${m.content}`);
+          }
+        }
+        // Mark current message as seen
+        markMessageSeen(client.agent.userId, msg.roomId, msg.id);
+      }
+
+      // Build inject message with context
+      let injectMsg = '';
+      if (contextMessages.length > 0) {
+        injectMsg = `[Queued messages while agent was busy]\n\n---\n${contextMessages.map((m, i) => `Queued #${i + 1}\n${m}`).join('\n\n---\n')}\n`;
+      }
+      injectMsg += `[${new Date(msg.timestamp).toLocaleString('de-DE', { timeZone: 'Europe/Berlin', dateStyle: 'short', timeStyle: 'short' })}] [Triologue:${msg.roomId}] ${msg.senderUsername}: ${msg.content}\n\n(Reply with: /root/.openclaw/workspace/send-to-triologue.sh ${msg.roomId} "<your message>")`;
+
       injectToSession(injectMsg)
-        .then(() => console.log(`[openclaw-inject:${client.agent.mentionKey}] ✅`))
+        .then(() => console.log(`[openclaw-inject:${client.agent.mentionKey}] ✅${contextMessages.length > 0 ? ` (+${contextMessages.length} unread)` : ''}`))
         .catch(err => console.warn(`[openclaw-inject:${client.agent.mentionKey}] ⚠️ ${err.message}`));
       continue;
     }
@@ -113,9 +139,28 @@ bridge.onMessage((msg) => {
 
     // ── OpenClaw inject: inject directly into local OpenClaw session ──
     if (agent.delivery === 'openclaw-inject') {
-      const injectMsg = `[Triologue:${msg.roomId}] ${msg.senderUsername}: ${msg.content}\n\n(Reply to this room: ROOM_ID=${msg.roomId})`;
+      // Fetch unread messages for this agent
+      let contextMessages: string[] = [];
+      const lastSeenId = getLastSeenMessageId(agent.userId, msg.roomId);
+      if (lastSeenId) {
+        const unreadMessages = await bridge.fetchMessagesSince(GATEWAY_TOKEN, msg.roomId, lastSeenId, 50);
+        // Format unread messages as context (exclude the current one)
+        contextMessages = unreadMessages
+          .filter(m => m.id !== msg.id)
+          .map(m => `[${m.sender?.username || 'unknown'}]: ${m.content}`);
+      }
+      // Mark current message as seen
+      markMessageSeen(agent.userId, msg.roomId, msg.id);
+
+      // Build inject message with context
+      let injectMsg = '';
+      if (contextMessages.length > 0) {
+        injectMsg = `[Queued messages while agent was busy]\n\n---\n${contextMessages.map((m, i) => `Queued #${i + 1}\n${m}`).join('\n\n---\n')}\n`;
+      }
+      injectMsg += `[${new Date(msg.timestamp).toLocaleString('de-DE', { timeZone: 'Europe/Berlin', dateStyle: 'short', timeStyle: 'short' })}] [Triologue:${msg.roomId}] ${msg.senderUsername}: ${msg.content}\n\n(Reply with: /root/.openclaw/workspace/send-to-triologue.sh ${msg.roomId} "<your message>")`;
+
       injectToSession(injectMsg)
-        .then(() => console.log(`[openclaw-inject:${agent.mentionKey}] ✅`))
+        .then(() => console.log(`[openclaw-inject:${agent.mentionKey}] ✅${contextMessages.length > 0 ? ` (+${contextMessages.length} unread)` : ''}`))
         .catch(err => console.warn(`[openclaw-inject:${agent.mentionKey}] ⚠️ ${err.message}`));
       continue;
     }

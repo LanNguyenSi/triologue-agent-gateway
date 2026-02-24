@@ -255,6 +255,31 @@ export class TriologueBridge {
     }
   }
 
+  /**
+   * Fetch messages from a room since a specific message ID (or all recent if no afterId).
+   * Used to get unread messages when an agent is mentioned.
+   */
+  async fetchMessagesSince(agentToken: string, roomId: string, afterId: string | null, limit: number = 50): Promise<any[]> {
+    try {
+      const url = `${this.config.trioUrl}/api/messages/${roomId}`;
+      const params: any = { limit };
+      if (afterId) {
+        params.after = afterId; // Fetch messages NEWER than this ID
+      }
+
+      const { data } = await axios.get(url, {
+        headers: { Authorization: `Bearer ${agentToken}` },
+        params,
+      });
+
+      // Triologue returns { messages: [...], hasMore, nextCursor, total }
+      return (data.messages || []).reverse(); // oldest first
+    } catch (err: any) {
+      console.error(`❌ Failed to fetch messages from ${roomId}: ${err.message}`);
+      return [];
+    }
+  }
+
   // ── Auth ──
 
   private async authenticate(): Promise<void> {
