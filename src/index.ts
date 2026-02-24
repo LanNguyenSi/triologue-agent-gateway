@@ -13,7 +13,7 @@ import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAgentByUsername } from './auth';
+import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAgentByUsername, startSync, stopSync } from './auth';
 import { TriologueBridge } from './triologue-bridge';
 import { shouldDeliver } from './loop-guard';
 import { injectToSession } from './openclaw-inject';
@@ -377,6 +377,9 @@ async function start(): Promise<void> {
     process.exit(1);
   }
 
+  // Start API sync (replaces static agents.json with DB-driven config)
+  await startSync();
+
   server.listen(PORT, () => {
     console.log(`🤖 Agent Gateway running on port ${PORT}`);
     console.log(`   WebSocket: ws://localhost:${PORT}/byoa/ws`);
@@ -387,6 +390,7 @@ async function start(): Promise<void> {
   // Graceful shutdown
   const shutdown = () => {
     console.log('Shutting down...');
+    stopSync();
     bridge.disconnect();
     for (const [, c] of clients) c.ws.close(1001, 'Server shutting down');
     server.close();
