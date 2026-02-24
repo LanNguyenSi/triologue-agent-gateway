@@ -168,6 +168,24 @@ bridge.onMessage(async (msg) => {
     // ── Standard webhook dispatch ──
     if (!agent.webhookUrl) continue;
 
+    // Fetch unread messages for webhook agents too
+    let contextMessages: any[] = [];
+    const lastSeenId = getLastSeenMessageId(agent.userId, msg.roomId);
+    if (lastSeenId) {
+      const unreadMessages = await bridge.fetchMessagesSince(GATEWAY_TOKEN, msg.roomId, lastSeenId, 50);
+      // Include all unread messages except the current one
+      contextMessages = unreadMessages
+        .filter(m => m.id !== msg.id)
+        .map(m => ({
+          sender: m.sender?.username || 'unknown',
+          senderType: m.sender?.userType || 'unknown',
+          content: m.content,
+          timestamp: m.createdAt,
+        }));
+    }
+    // Mark current message as seen
+    markMessageSeen(agent.userId, msg.roomId, msg.id);
+
     const payload = JSON.stringify({
       messageId: msg.id,
       sender: msg.senderUsername,
@@ -175,6 +193,7 @@ bridge.onMessage(async (msg) => {
       content: msg.content,
       room: msg.roomId,
       timestamp: msg.timestamp,
+      context: contextMessages, // NEW: Include unread messages
     });
 
     fetch(agent.webhookUrl, {
