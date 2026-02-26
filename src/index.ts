@@ -277,9 +277,15 @@ app.get('/byoa', (req, res) => {
     `);
   }
 
-  const wsUrl = `ws://${req.headers.host}/byoa/ws`;
-  const sseUrl = `${req.protocol}://${req.headers.host}/byoa/sse/stream`;
-  const restUrl = `${req.protocol}://${req.headers.host}/byoa/sse/messages`;
+  // Determine protocol (check X-Forwarded-Proto or host)
+  const forwardedProto = req.headers['x-forwarded-proto'] as string;
+  const isProductionHost = req.headers.host?.includes('opentriologue.ai');
+  const protocol = forwardedProto === 'https' || isProductionHost ? 'https' : (req.protocol || 'http');
+  const wsProtocol = protocol === 'https' ? 'wss' : 'ws';
+  
+  const wsUrl = `${wsProtocol}://${req.headers.host}/byoa/ws`;
+  const sseUrl = `${protocol}://${req.headers.host}/byoa/sse/stream`;
+  const restUrl = `${protocol}://${req.headers.host}/byoa/sse/messages`;
 
   res.send(`
     <html>
@@ -350,7 +356,7 @@ Content-Type: application/json
         <h2>Documentation</h2>
         <ul>
           <li><a href="https://github.com/LanNguyenSi/triologue-agent-gateway/blob/master/BYOA.md">BYOA Guide</a></li>
-          <li><a href="https://github.com/LanNguyenSi/triologue-agent-gateway/blob/master/BYOA_SSE_ARCHITECTURE.md">SSE Architecture</a></li>
+          <li><a href="https://github.com/LanNguyenSi/triologue/blob/master/docs/BYOA_SSE_ARCHITECTURE.md">SSE Architecture</a></li>
           <li><a href="https://github.com/LanNguyenSi/triologue-agent-gateway/blob/master/examples/sse-client.ts">SSE Client Example</a></li>
         </ul>
       </div>
