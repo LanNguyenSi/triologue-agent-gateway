@@ -20,6 +20,7 @@ import { shouldDeliver } from './loop-guard';
 import { injectToSession } from './openclaw-inject';
 import { loadReadTracker, getLastSeenMessageId, markMessageSeen } from './read-tracker';
 import { metrics } from './metrics';
+import { sseRouter, shutdownSSE } from './byoa-sse';
 import type { AgentInfo, WsClient } from './types';
 
 // ── Config ──
@@ -44,6 +45,10 @@ loadReadTracker();
 
 const app = express();
 app.use(express.json());
+
+// Mount SSE + REST prototype routes
+app.use('/byoa/sse', sseRouter);
+
 const server = createServer(app);
 
 // ── Active WebSocket clients ──
@@ -420,6 +425,7 @@ async function start(): Promise<void> {
     stopSync();
     bridge.disconnect();
     metrics.shutdown();
+    shutdownSSE();
     for (const [, c] of clients) c.ws.close(1001, 'Server shutting down');
     server.close();
     process.exit(0);
