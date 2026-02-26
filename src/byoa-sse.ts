@@ -17,9 +17,17 @@ import crypto from 'crypto';
 import { Redis } from 'ioredis';
 import { metrics } from './metrics';
 import type { AgentInfo } from './types';
+import type { TriologueBridge } from './triologue-bridge';
 
 // Use existing auth system
 import { authenticateToken } from './auth';
+
+// ── Bridge reference (injected from index.ts) ──
+let bridge: TriologueBridge | null = null;
+
+export function setBridge(b: TriologueBridge): void {
+  bridge = b;
+}
 
 // ── Config ──
 
@@ -196,10 +204,19 @@ sseRouter.post('/messages', authenticateSSE, rateLimitMiddleware, async (req: Re
     }
   }
 
-  // TODO: Send to Triologue via bridge
-  // For now, just simulate success
-  const messageId = crypto.randomUUID();
+  // Send to Triologue via bridge
+  if (!bridge) {
+    return res.status(503).json({ error: 'Bridge not connected' });
+  }
 
+  try {
+    await bridge.sendAsAgent(token, roomId, content);
+  } catch (err: any) {
+    console.error(`[SSE] Send failed for ${agent.name}: ${err.message}`);
+    return res.status(502).json({ error: 'Failed to deliver message', detail: err.message });
+  }
+
+  const messageId = crypto.randomUUID();
   const response = { messageId, status: 'sent' };
 
   // Cache idempotency result (TTL 1 hour)
@@ -310,30 +327,36 @@ function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-// ── Message Fanout (to be called from Triologue bridge) ──
+// ── Message Fanout (called from index.ts message routing) ──
 
-export async function fanoutToSSE(message: AgentMessage): Promise<void> {
-  const eventId = await redis.incr('sse:eventId'); // Global monotonic ID
+export function getSSEClientAgentIds(): string[] {
+  return [...sseClients.keys()];
+}
 
-  // TODO: Persist message in Redis sorted set for resume
-  // await redis.zadd(`messages:${message.room}`, eventId, JSON.stringify({ ...message, eventId }));
-  // await redis.expire(`messages:${message.room}`, 86400);
+export function hasSSEClient(agentId: string): boolean {
+  const clients = sseClients.get(agentId);
+  return !!clients && clients.length > 0;
+}
 
-  // Fan out to all connected SSE agents
-  for (const [agentId, clients] of sseClients.entries()) {
-    // TODO: Check room membership, trust level, receive mode filters
-    // For prototype, send to all SSE clients
+export async function fanoutToSSEClient(agentId: string, message: AgentMessage): Promise<void> {
+  const clients = sseClients.get(agentId);
+  if (!clients || clients.length === 0) return;
 
-    const sseData = formatSSE(eventId, 'message', message);
-    for (const client of clients) {
-      try {
-        if (client.res.writable && !client.res.writableEnded) {
-          client.res.write(sseData);
-          client.lastEventId = eventId;
-        }
-      } catch (err) {
-        console.error(`[SSE] Failed to send to ${client.agentName}:`, err);
+  const eventId = await redis.incr('sse:eventId');
+
+  // Persist in Redis for Last-Event-ID resume (24h TTL)
+  await redis.zadd(`sse:messages:${message.room}`, eventId, JSON.stringify({ ...message, eventId }));
+  await redis.expire(`sse:messages:${message.room}`, 86400);
+
+  const sseData = formatSSE(eventId, 'message', message);
+  for (const client of clients) {
+    try {
+      if (client.res.writable && !client.res.writableEnded) {
+        client.res.write(sseData);
+        client.lastEventId = eventId;
       }
+    } catch (err) {
+      console.error(`[SSE] Failed to send to ${client.agentName}:`, err);
     }
   }
 }

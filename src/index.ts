@@ -13,14 +13,14 @@ import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
-import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAgentByUsername, startSync, stopSync } from './auth';
+import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAgentByUsername, getAllAgents, startSync, stopSync } from './auth';
 import { dispatchWebhook } from './webhook-dispatch';
 import { TriologueBridge } from './triologue-bridge';
 import { shouldDeliver } from './loop-guard';
 import { injectToSession } from './openclaw-inject';
 import { loadReadTracker, getLastSeenMessageId, markMessageSeen } from './read-tracker';
 import { metrics } from './metrics';
-import { sseRouter, shutdownSSE } from './byoa-sse';
+import { sseRouter, shutdownSSE, setBridge as setSSEBridge, hasSSEClient, fanoutToSSEClient } from './byoa-sse';
 import type { AgentInfo, WsClient } from './types';
 
 // ── Config ──
@@ -128,6 +128,30 @@ bridge.onMessage(async (msg) => {
       sender: msg.senderUsername,
       senderDisplayName: msg.senderUsername,
       senderType: msg.senderType,
+      content: msg.content,
+      timestamp: msg.timestamp,
+    });
+  }
+
+  // ── SSE agents: forward with same filtering as WebSocket ──
+  for (const agent of getAllAgents()) {
+    if (!hasSSEClient(agent.userId)) continue;
+    // Don't send back to sender
+    if (agent.username === msg.senderUsername) continue;
+    if (agent.userId === msg.senderId) continue;
+    // Don't double-deliver to WS+SSE
+    if (clients.has(agent.userId)) continue;
+
+    const mentioned = msg.content.toLowerCase().includes(`@${agent.mentionKey}`) || msg.content.toLowerCase().includes(`@${agent.username}`);
+    if (agent.receiveMode === 'mentions' && !mentioned) continue;
+    if (!mentioned && !shouldDeliver(agent.trustLevel, senderIsAgent, msg.senderUsername, agent.username)) continue;
+
+    fanoutToSSEClient(agent.userId, {
+      id: msg.id,
+      room: msg.roomId,
+      roomName: msg.roomName || '',
+      sender: msg.senderUsername,
+      senderType: msg.senderType === 'ai' ? 'AI' : 'HUMAN',
       content: msg.content,
       timestamp: msg.timestamp,
     });
@@ -508,6 +532,7 @@ function safeSend(ws: WebSocket, data: any): void {
 async function start(): Promise<void> {
   try {
     await bridge.connect();
+    setSSEBridge(bridge); // Inject bridge into SSE module for message sending
   } catch (err: any) {
     console.error(`❌ Failed to connect to Triologue: ${err.message}`);
     process.exit(1);

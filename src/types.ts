@@ -13,6 +13,7 @@ export interface AgentInfo {
   connectionType: 'webhook' | 'websocket' | 'both';
   receiveMode: 'mentions' | 'all';
   delivery?: 'webhook' | 'openclaw-inject';
+  status?: string;
 }
 
 /** Inbound event from Triologue Socket.io */

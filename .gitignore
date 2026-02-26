@@ -3,3 +3,5 @@ dist/
 .env
 .jwt-cache-*
 agents.json
+gateway.log
+metrics.jsonl
