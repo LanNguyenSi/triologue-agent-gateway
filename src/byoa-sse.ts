@@ -154,8 +154,12 @@ sseRouter.get('/stream', authenticateSSE, (req: Request, res: Response) => {
     })
   );
 
-  // TODO: Deliver missed messages if lastEventId > 0
-  // Requires message persistence in Redis (sorted set per room)
+  // Deliver missed messages if lastEventId > 0 (resume after reconnect)
+  if (lastEventId > 0) {
+    replayMissedMessages(agent.userId, lastEventId, res).catch((err) =>
+      console.error(`[SSE] Replay failed for ${agent.name}: ${err.message}`)
+    );
+  }
 
   // Heartbeat every 25s (keeps connection alive through proxies)
   const heartbeat = setInterval(() => {
@@ -236,33 +240,15 @@ sseRouter.post('/messages', authenticateSSE, rateLimitMiddleware, async (req: Re
 });
 
 // ── 3) Token Rotation ──
+// Requires Triologue server-side support (not yet implemented).
+// When available: generate new token in DB, invalidate old, disconnect SSE streams.
 
 sseRouter.post('/tokens/rotate', authenticateSSE, async (req: Request, res: Response) => {
-  const agent: AgentInfo = (req as any).agent;
-
-  // TODO: Generate new token and update in DB
-  // For prototype, just return mock response
-  const newToken = `byoa_${crypto.randomBytes(32).toString('hex')}`;
-
-  // Disconnect all existing SSE streams for this agent
-  const clients = sseClients.get(agent.userId);
-  if (clients) {
-    for (const client of clients) {
-      client.res.write(
-        formatSSE(0, 'token_rotated', {
-          message: 'Reconnect with new token',
-        })
-      );
-      client.res.end();
-    }
-    sseClients.delete(agent.userId);
-  }
-
-  console.log(`🔄 [SSE] ${agent.emoji} ${agent.name} rotated token`);
-
-  res.json({
-    token: newToken,
-    message: 'Store this token safely. Old token is now invalid.',
+  // Token rotation requires a Triologue API endpoint to update the token in the database.
+  // This is not yet available — return 501 instead of a fake response.
+  res.status(501).json({
+    error: 'NOT_IMPLEMENTED',
+    message: 'Token rotation requires Triologue server support. Contact an admin to manually regenerate your token.',
   });
 });
 
@@ -325,6 +311,42 @@ function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
   res.set('X-RateLimit-Limit', String(maxRequests));
   res.set('X-RateLimit-Remaining', String(maxRequests - timestamps.length));
   next();
+}
+
+// ── Resume: Replay missed messages from Redis ──
+
+async function replayMissedMessages(agentId: string, afterEventId: number, res: Response): Promise<void> {
+  // Scan all room keys for messages after the given event ID
+  const keys = await redis.keys('sse:messages:*');
+  const missed: Array<{ eventId: number; data: string }> = [];
+
+  for (const key of keys) {
+    // Get messages with score > afterEventId (score = eventId)
+    const entries = await redis.zrangebyscore(key, afterEventId + 1, '+inf');
+    for (const entry of entries) {
+      try {
+        const parsed = JSON.parse(entry);
+        missed.push({ eventId: parsed.eventId, data: entry });
+      } catch { /* skip malformed */ }
+    }
+  }
+
+  // Sort by eventId and deliver
+  missed.sort((a, b) => a.eventId - b.eventId);
+
+  if (missed.length > 0) {
+    console.log(`[SSE] Replaying ${missed.length} missed messages for agent ${agentId} (after eventId ${afterEventId})`);
+  }
+
+  for (const m of missed) {
+    try {
+      const parsed = JSON.parse(m.data);
+      const sseData = formatSSE(m.eventId, 'message', parsed);
+      if (res.writable && !res.writableEnded) {
+        res.write(sseData);
+      }
+    } catch { /* skip */ }
+  }
 }
 
 // ── Message Fanout (called from index.ts message routing) ──
