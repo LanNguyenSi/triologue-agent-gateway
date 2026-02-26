@@ -254,6 +254,111 @@ app.get('/health', (_, res) => {
   });
 });
 
+// ── REST: BYOA Info Page (for users to get their connection details) ──
+
+app.get('/byoa', (req, res) => {
+  const token = req.query.token as string;
+  
+  if (!token) {
+    return res.status(400).send(`
+      <h1>BYOA — Bring Your Own Agent</h1>
+      <p>Missing <code>?token=byoa_xxx</code> parameter.</p>
+      <p>Get your token from Settings → My Agents in OpenTriologue.</p>
+    `);
+  }
+
+  const agent = authenticateToken(token);
+  
+  if (!agent) {
+    return res.status(401).send(`
+      <h1>BYOA — Invalid Token</h1>
+      <p>Token not found or inactive.</p>
+      <p>Check your token in Settings → My Agents.</p>
+    `);
+  }
+
+  const wsUrl = `ws://${req.headers.host}/byoa/ws`;
+  const sseUrl = `${req.protocol}://${req.headers.host}/byoa/sse/stream`;
+  const restUrl = `${req.protocol}://${req.headers.host}/byoa/sse/messages`;
+
+  res.send(`
+    <html>
+    <head>
+      <title>BYOA — ${agent.name}</title>
+      <style>
+        body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 20px; }
+        h1 { color: #333; }
+        code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; }
+        pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto; }
+        .section { margin: 30px 0; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
+        .token { background: #ffe; padding: 10px; border-left: 4px solid #fa0; }
+        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+        th { background: #f5f5f5; }
+      </style>
+    </head>
+    <body>
+      <h1>🤖 BYOA — ${agent.emoji} ${agent.name}</h1>
+      
+      <div class="section">
+        <h2>Agent Info</h2>
+        <table>
+          <tr><th>Name</th><td>${agent.name}</td></tr>
+          <tr><th>Username</th><td>@${agent.username}</td></tr>
+          <tr><th>Mention Key</th><td>${agent.mentionKey}</td></tr>
+          <tr><th>Trust Level</th><td>${agent.trustLevel}</td></tr>
+          <tr><th>Status</th><td>${agent.status}</td></tr>
+        </table>
+      </div>
+
+      <div class="section token">
+        <h2>⚠️ Your Token (keep secret!)</h2>
+        <pre><code>${token}</code></pre>
+        <p><strong>Never share this publicly!</strong> Anyone with this token can act as your agent.</p>
+      </div>
+
+      <div class="section">
+        <h2>Connection Options</h2>
+        
+        <h3>Option 1: WebSocket (existing)</h3>
+        <pre><code>ws.connect('${wsUrl}')
+ws.send({ type: 'auth', token: '${token}' })</code></pre>
+        
+        <h3>Option 2: SSE + REST (new, recommended)</h3>
+        <p><strong>Receive (SSE):</strong></p>
+        <pre><code>GET ${sseUrl}
+Authorization: Bearer ${token}</code></pre>
+        
+        <p><strong>Send (REST):</strong></p>
+        <pre><code>POST ${restUrl}
+Authorization: Bearer ${token}
+Content-Type: application/json
+
+{ "roomId": "...", "content": "..." }</code></pre>
+
+        <p>✅ Benefits: Per-request auth, instant token revocation, proxy-friendly</p>
+      </div>
+
+      <div class="section">
+        <h2>Quick Test</h2>
+        <p>Test SSE stream (will open in new tab):</p>
+        <pre><code>curl -N -H "Authorization: Bearer ${token}" \\
+  ${sseUrl}</code></pre>
+      </div>
+
+      <div class="section">
+        <h2>Documentation</h2>
+        <ul>
+          <li><a href="https://github.com/LanNguyenSi/triologue-agent-gateway/blob/master/BYOA.md">BYOA Guide</a></li>
+          <li><a href="https://github.com/LanNguyenSi/triologue-agent-gateway/blob/master/BYOA_SSE_ARCHITECTURE.md">SSE Architecture</a></li>
+          <li><a href="https://github.com/LanNguyenSi/triologue-agent-gateway/blob/master/examples/sse-client.ts">SSE Client Example</a></li>
+        </ul>
+      </div>
+    </body>
+    </html>
+  `);
+});
+
 // ── REST: Metrics (for migration decision) ──
 
 app.get('/metrics', (_, res) => {
