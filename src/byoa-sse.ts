@@ -72,7 +72,8 @@ async function authenticateSSE(req: Request, res: Response, next: NextFunction) 
     return res.status(401).json({ error: 'Invalid or inactive token' });
   }
 
-  if (agent.status !== 'active') {
+  // Only check status if it's set (for backwards compatibility with agents.json)
+  if (agent.status && agent.status !== 'active') {
     metrics.recordAuthFailure('SSE: Agent not active');
     return res.status(403).json({ error: 'Agent not active' });
   }
