@@ -19,6 +19,7 @@ import { TriologueBridge } from './triologue-bridge';
 import { shouldDeliver } from './loop-guard';
 import { injectToSession } from './openclaw-inject';
 import { loadReadTracker, getLastSeenMessageId, markMessageSeen } from './read-tracker';
+import { metrics } from './metrics';
 import type { AgentInfo, WsClient } from './types';
 
 // ── Config ──
@@ -207,6 +208,8 @@ bridge.onMessage(async (msg) => {
       },
       body: payload,
       agentKey: agent.mentionKey,
+      agentId: agent.userId,
+      roomId: msg.roomId,
     });
   }
 });
@@ -246,6 +249,17 @@ app.get('/health', (_, res) => {
   });
 });
 
+// ── REST: Metrics (for migration decision) ──
+
+app.get('/metrics', (_, res) => {
+  res.set('Content-Type', 'text/plain');
+  res.send(metrics.generateReport());
+});
+
+app.get('/metrics/json', (_, res) => {
+  res.json(metrics.getSnapshot());
+});
+
 // ── WebSocket Server ──
 
 const wss = new WebSocketServer({ server, path: '/byoa/ws' });
@@ -274,6 +288,7 @@ wss.on('connection', (ws) => {
 
       const agent = authenticateToken(event.token);
       if (!agent) {
+        metrics.recordAuthFailure('Invalid or inactive token');
         safeSend(ws, { type: 'auth_error', error: 'Invalid or inactive token' });
         ws.close(4003, 'Auth failed');
         return;
@@ -291,6 +306,9 @@ wss.on('connection', (ws) => {
 
       // Store token on client for sendAsAgent
       (client as any)._token = event.token;
+      
+      // Record metrics
+      metrics.recordConnection(agent.userId, agent.name);
 
       // Fetch agent's rooms
       const agentRooms = await bridge.getAgentRooms(event.token, agent.username);
@@ -346,11 +364,12 @@ wss.on('connection', (ws) => {
     if (ws.readyState === WebSocket.OPEN) safeSend(ws, { type: 'ping' });
   }, 30_000);
 
-  ws.on('close', () => {
+  ws.on('close', (code, reason) => {
     clearTimeout(authTimeout);
     clearInterval(pingInterval);
     if (client) {
       clients.delete(client.agent.userId);
+      metrics.recordDisconnect(client.agent.userId, `code ${code}: ${reason || 'unknown'}`);
       console.log(`❌ ${client.agent.emoji} ${client.agent.name} disconnected`);
     }
   });
@@ -388,11 +407,19 @@ async function start(): Promise<void> {
     console.log(`   Health:    http://localhost:${PORT}/health`);
   });
 
+  // Update agent counts every 30s
+  setInterval(() => {
+    const webhookAgents = getWebhookAgents().length;
+    const wsAgents = clients.size;
+    metrics.updateAgentCounts(wsAgents, webhookAgents);
+  }, 30_000);
+
   // Graceful shutdown
   const shutdown = () => {
     console.log('Shutting down...');
     stopSync();
     bridge.disconnect();
+    metrics.shutdown();
     for (const [, c] of clients) c.ws.close(1001, 'Server shutting down');
     server.close();
     process.exit(0);

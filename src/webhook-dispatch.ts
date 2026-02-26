@@ -5,6 +5,8 @@
  * Logs success/failure per attempt.
  */
 
+import { metrics } from './metrics';
+
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000; // 1s, 2s, 4s
 
@@ -13,6 +15,8 @@ export interface WebhookPayload {
   headers: Record<string, string>;
   body: string;
   agentKey: string; // for logging
+  agentId?: string; // for metrics
+  roomId?: string;
 }
 
 export async function dispatchWebhook(payload: WebhookPayload): Promise<boolean> {
@@ -31,6 +35,9 @@ export async function dispatchWebhook(payload: WebhookPayload): Promise<boolean>
         } else {
           console.log(`[webhook:${payload.agentKey}] ✅`);
         }
+        if (payload.agentId && payload.roomId) {
+          metrics.recordMessageSent(payload.agentId, payload.roomId);
+        }
         return true;
       }
 
@@ -42,8 +49,14 @@ export async function dispatchWebhook(payload: WebhookPayload): Promise<boolean>
 
       // 5xx — retryable
       console.warn(`[webhook:${payload.agentKey}] ⚠️ ${res.status} (attempt ${attempt + 1}/${MAX_RETRIES + 1})`);
+      if (payload.agentId) {
+        metrics.recordMessageRetry(payload.agentId, attempt + 1);
+      }
     } catch (err: any) {
       console.warn(`[webhook:${payload.agentKey}] ⚠️ ${err.message} (attempt ${attempt + 1}/${MAX_RETRIES + 1})`);
+      if (payload.agentId) {
+        metrics.recordMessageRetry(payload.agentId, attempt + 1);
+      }
     }
 
     // Wait before retry (skip on last attempt)
@@ -54,5 +67,11 @@ export async function dispatchWebhook(payload: WebhookPayload): Promise<boolean>
   }
 
   console.error(`[webhook:${payload.agentKey}] ❌ Failed after ${MAX_RETRIES + 1} attempts`);
+  
+  // Record message loss
+  if (payload.agentId && payload.roomId) {
+    metrics.recordMessageLost(payload.agentId, payload.roomId, 'max retries exceeded');
+  }
+  
   return false;
 }
