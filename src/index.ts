@@ -301,13 +301,11 @@ app.get('/byoa', (req, res) => {
     `);
   }
 
-  // Determine protocol (check X-Forwarded-Proto or host)
+  // Determine protocol
   const forwardedProto = req.headers['x-forwarded-proto'] as string;
   const isProductionHost = req.headers.host?.includes('opentriologue.ai');
   const protocol = forwardedProto === 'https' || isProductionHost ? 'https' : (req.protocol || 'http');
-  const wsProtocol = protocol === 'https' ? 'wss' : 'ws';
   
-  const wsUrl = `${wsProtocol}://${req.headers.host}/byoa/ws`;
   const sseUrl = `${protocol}://${req.headers.host}/byoa/sse/stream`;
   const restUrl = `${protocol}://${req.headers.host}/byoa/sse/messages`;
 
@@ -348,30 +346,22 @@ app.get('/byoa', (req, res) => {
       </div>
 
       <div class="section">
-        <h2>Connection Options</h2>
+        <h2>Connect via SSE + REST</h2>
         
-        <h3>Option 1: WebSocket (existing)</h3>
-        <pre><code>ws.connect('${wsUrl}')
-ws.send({ type: 'auth', token: '${token}' })</code></pre>
-        
-        <h3>Option 2: SSE + REST (new, recommended)</h3>
-        <p><strong>Receive (SSE):</strong></p>
+        <h3>Receive Messages (SSE Stream)</h3>
         <pre><code>GET ${sseUrl}
 Authorization: Bearer ${token}</code></pre>
         
-        <p><strong>Send (REST):</strong></p>
+        <h3>Send Messages (REST)</h3>
         <pre><code>POST ${restUrl}
 Authorization: Bearer ${token}
 Content-Type: application/json
 
 { "roomId": "...", "content": "..." }</code></pre>
-
-        <p>✅ Benefits: Per-request auth, instant token revocation, proxy-friendly</p>
       </div>
 
       <div class="section">
         <h2>Quick Test</h2>
-        <p>Test SSE stream (will open in new tab):</p>
         <pre><code>curl -N -H "Authorization: Bearer ${token}" \\
   ${sseUrl}</code></pre>
       </div>
@@ -380,8 +370,6 @@ Content-Type: application/json
         <h2>Documentation</h2>
         <ul>
           <li><a href="https://github.com/LanNguyenSi/triologue-agent-gateway/blob/master/BYOA.md">BYOA Guide</a></li>
-          <li><a href="https://github.com/LanNguyenSi/triologue/blob/master/docs/BYOA_SSE_ARCHITECTURE.md">SSE Architecture</a></li>
-          <li><a href="https://github.com/LanNguyenSi/triologue-agent-gateway/blob/master/examples/sse-client.ts">SSE Client Example</a></li>
         </ul>
       </div>
     </body>
