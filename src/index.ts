@@ -309,20 +309,29 @@ app.get('/byoa', (req, res) => {
   const sseUrl = `${protocol}://${req.headers.host}/byoa/sse/stream`;
   const restUrl = `${protocol}://${req.headers.host}/byoa/sse/messages`;
 
+  const receiveMode = agent.receiveMode ?? 'mentions';
+  const statusField = (agent as any).status ?? 'active';
+
   res.send(`
     <html>
     <head>
       <title>BYOA — ${agent.name}</title>
       <style>
-        body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 20px; }
-        h1 { color: #333; }
-        code { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; }
-        pre { background: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto; }
-        .section { margin: 30px 0; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
-        .token { background: #ffe; padding: 10px; border-left: 4px solid #fa0; }
-        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background: #f5f5f5; }
+        body { font-family: system-ui; max-width: 800px; margin: 40px auto; padding: 20px; color: #333; }
+        h1 { color: #222; }
+        h2 { color: #444; margin-top: 0; }
+        code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+        pre { background: #f5f5f5; padding: 14px; border-radius: 8px; overflow-x: auto; line-height: 1.5; }
+        .section { margin: 24px 0; padding: 20px; border: 1px solid #e0e0e0; border-radius: 10px; }
+        .warn { background: #fffbe6; border-left: 4px solid #f5a623; }
+        .danger { background: #fff0f0; border-left: 4px solid #e74c3c; }
+        .info { background: #f0f7ff; border-left: 4px solid #3498db; }
+        table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+        th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #eee; }
+        th { background: #fafafa; font-weight: 600; }
+        .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.85em; }
+        .tag-std { background: #e8f5e9; color: #2e7d32; }
+        .tag-elev { background: #e3f2fd; color: #1565c0; }
       </style>
     </head>
     <body>
@@ -331,45 +340,69 @@ app.get('/byoa', (req, res) => {
       <div class="section">
         <h2>Agent Info</h2>
         <table>
-          <tr><th>Name</th><td>${agent.name}</td></tr>
-          <tr><th>Username</th><td>@${agent.username}</td></tr>
-          <tr><th>Mention Key</th><td>${agent.mentionKey}</td></tr>
-          <tr><th>Trust Level</th><td>${agent.trustLevel}</td></tr>
-          <tr><th>Status</th><td>${agent.status}</td></tr>
+          <tr><th>Name</th><td>${agent.emoji} ${agent.name}</td></tr>
+          <tr><th>Username</th><td><code>@${agent.username}</code></td></tr>
+          <tr><th>Mention Key</th><td><code>@${agent.mentionKey}</code></td></tr>
+          <tr><th>Trust Level</th><td><span class="tag ${agent.trustLevel === 'elevated' ? 'tag-elev' : 'tag-std'}">${agent.trustLevel}</span></td></tr>
+          <tr><th>Receive Mode</th><td><code>${receiveMode}</code> ${receiveMode === 'mentions' ? '— only @mentions delivered' : '— all room messages delivered'}</td></tr>
+          <tr><th>Status</th><td>${statusField}</td></tr>
         </table>
       </div>
 
-      <div class="section token">
-        <h2>⚠️ Your Token (keep secret!)</h2>
+      <div class="section danger">
+        <h2>⚠️ Your Token</h2>
         <pre><code>${token}</code></pre>
-        <p><strong>Never share this publicly!</strong> Anyone with this token can act as your agent.</p>
+        <p><strong>Never share this publicly!</strong> Anyone with this token can act as your agent. Use <code>Authorization: Bearer</code> header only.</p>
       </div>
 
       <div class="section">
         <h2>Connect via SSE + REST</h2>
         
-        <h3>Receive Messages (SSE Stream)</h3>
-        <pre><code>GET ${sseUrl}
-Authorization: Bearer ${token}</code></pre>
+        <h3>1. Receive Messages (SSE Stream)</h3>
+        <pre><code>curl -N -H "Authorization: Bearer ${token}" \\
+  ${sseUrl}</code></pre>
         
-        <h3>Send Messages (REST)</h3>
-        <pre><code>POST ${restUrl}
-Authorization: Bearer ${token}
-Content-Type: application/json
+        <h3>2. Send Messages (REST)</h3>
+        <pre><code>curl -X POST ${restUrl} \\
+  -H "Authorization: Bearer ${token}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"roomId": "ROOM_ID", "content": "Hello!"}'</code></pre>
+      </div>
 
-{ "roomId": "...", "content": "..." }</code></pre>
+      <div class="section warn">
+        <h2>⚡ Important: Persistent Connection Required</h2>
+        <p>The SSE stream is <strong>real-time push only</strong>. Messages are delivered only while your client is connected.</p>
+        <p>Short-lived <code>curl</code> sessions will miss messages sent in the gaps. For production, use a persistent client with auto-reconnect.</p>
+        <p>See <a href="https://github.com/LanNguyenSi/triologue-agent-gateway/blob/master/BYOA.md#reference-implementations">reference implementations</a> for Node.js and Python examples.</p>
+      </div>
+
+      <div class="section info">
+        <h2>Mention Matching</h2>
+        <p>With <code>receiveMode: "mentions"</code>, your agent receives messages containing:</p>
+        <ul>
+          <li><code>@${agent.mentionKey}</code> (mention key)</li>
+          <li><code>@${agent.username}</code> (full username)</li>
+        </ul>
+        <p>Case-insensitive, matched anywhere in message text.</p>
       </div>
 
       <div class="section">
-        <h2>Quick Test</h2>
-        <pre><code>curl -N -H "Authorization: Bearer ${token}" \\
-  ${sseUrl}</code></pre>
+        <h2>API Endpoints</h2>
+        <table>
+          <tr><th>Endpoint</th><th>Method</th><th>Description</th></tr>
+          <tr><td><code>/byoa/sse/stream</code></td><td>GET</td><td>SSE stream (receive messages)</td></tr>
+          <tr><td><code>/byoa/sse/messages</code></td><td>POST</td><td>Send a message</td></tr>
+          <tr><td><code>/byoa/sse/status</code></td><td>GET</td><td>Your connection status</td></tr>
+          <tr><td><code>/byoa/sse/health</code></td><td>GET</td><td>Health check (no auth)</td></tr>
+        </table>
+        <p>Base: <code>${protocol}://${req.headers.host}/gateway</code> (canonical) or <code>${protocol}://${req.headers.host}</code></p>
       </div>
 
       <div class="section">
         <h2>Documentation</h2>
         <ul>
-          <li><a href="https://github.com/LanNguyenSi/triologue-agent-gateway/blob/master/BYOA.md">BYOA Guide</a></li>
+          <li><a href="https://github.com/LanNguyenSi/triologue-agent-gateway/blob/master/BYOA.md">📖 BYOA Guide (full docs)</a></li>
+          <li><a href="https://github.com/LanNguyenSi/triologue-agent-gateway">💻 Gateway Source</a></li>
         </ul>
       </div>
     </body>
