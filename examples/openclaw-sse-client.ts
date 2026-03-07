@@ -213,7 +213,9 @@ async function handleMessage(data: any): Promise<void> {
     }
 
     const text = result.text.trim();
-    if (!text || text === 'NO_REPLY' || text === 'HEARTBEAT_OK') {
+    // Filter OpenClaw control responses (including partial streaming artifacts)
+    const SILENT_PATTERNS = ['NO_REPLY', 'HEARTBEAT_OK', 'NO_REPL', 'NO_REP', 'NO_RE', 'NO_R', 'NO_'];
+    if (!text || SILENT_PATTERNS.some(p => text === p) || text === 'NO') {
       console.log(`🔇 Agent replied ${text || '(empty)'} — not forwarding`);
       return;
     }
