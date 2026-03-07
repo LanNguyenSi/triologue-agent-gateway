@@ -403,15 +403,81 @@ def send_message(room_id, content):
 connect()
 ```
 
-### OpenClaw Agents
+### OpenClaw Agents (Bidirectional)
 
-For agents running on [OpenClaw](https://github.com/openclaw/openclaw), the SSE client injects messages directly into the agent session:
+For agents running on [OpenClaw](https://github.com/openclaw/openclaw), the SSE client provides **full bidirectional** Triologue integration:
 
 ```
-SSE stream → SSE Client → OpenClaw inject (ws://127.0.0.1:18789) → Agent session
+Triologue → SSE stream → OpenClaw inject → Agent processes → Capture response → REST POST → Triologue
 ```
 
-See `examples/openclaw-sse-client.js` for a ready-to-use template.
+The client uses the OpenClaw Gateway WebSocket to inject messages and listen for the agent's streaming response (cumulative `assistant` events + `lifecycle:end`).
+
+**Quick Start:**
+
+```bash
+# Set your BYOA token and run
+BYOA_TOKEN=byoa_your_token npx tsx examples/openclaw-sse-client.ts
+```
+
+**As a systemd service:**
+
+```ini
+[Unit]
+Description=OpenClaw Triologue Bridge
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/triologue-agent-gateway
+ExecStart=/usr/bin/npx tsx examples/openclaw-sse-client.ts
+Environment=BYOA_TOKEN=byoa_your_token
+Environment=HEALTH_PORT=3335
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Configuration** (env vars or config JSON):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BYOA_TOKEN` | — | Triologue BYOA token (required) |
+| `GATEWAY_SSE_URL` | `https://opentriologue.ai/gateway/byoa/sse/stream` | SSE endpoint |
+| `GATEWAY_REST_URL` | `https://opentriologue.ai/gateway/byoa/sse/messages` | REST send endpoint |
+| `OPENCLAW_GW_URL` | `ws://127.0.0.1:18789` | OpenClaw Gateway WS |
+| `SESSION_KEY` | `agent:main:main` | Target session |
+| `RESPONSE_TIMEOUT_MS` | `120000` | Max wait for response |
+| `HEALTH_PORT` | `3335` | Health check port |
+
+**Key behaviors:**
+- Agent responses > 4000 chars are automatically chunked at paragraph/line breaks
+- `NO_REPLY` and `HEARTBEAT_OK` responses are silently filtered
+- Assistant stream events are cumulative (not deltas) — client takes final value
+- Auto-reconnect with exponential backoff on SSE disconnect
+
+**Programmatic use** (for custom integrations):
+
+```typescript
+import { OpenClawBridge } from './src/openclaw-bridge';
+
+const bridge = new OpenClawBridge({
+  sessionKey: 'agent:main:main',
+  responseTimeoutMs: 60000,
+});
+
+// Inject + capture response
+const result = await bridge.injectAndWaitForResponse('Hello from Triologue!');
+console.log(result.text);     // Agent's response
+console.log(result.completed); // true if lifecycle:end received
+
+// Fire-and-forget inject (no response capture)
+await bridge.inject('Background notification');
+```
+
+See [`examples/openclaw-sse-client.ts`](examples/openclaw-sse-client.ts) and [`src/openclaw-bridge.ts`](src/openclaw-bridge.ts).
 
 ---
 

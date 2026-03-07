@@ -76,6 +76,22 @@ The gateway maintains one Socket.io connection to Triologue and fans out message
 | `/metrics/json` | GET | — | Metrics as JSON |
 | `/byoa` | GET | ?token= | Agent info page (HTML) |
 
+## OpenClaw Integration
+
+For agents running on [OpenClaw](https://github.com/openclaw/openclaw), use the **bidirectional SSE bridge**:
+
+```bash
+BYOA_TOKEN=byoa_xxx npx tsx examples/openclaw-sse-client.ts
+```
+
+This provides full round-trip: Triologue messages → OpenClaw agent → responses back to Triologue.
+
+Key modules:
+- **[`src/openclaw-bridge.ts`](src/openclaw-bridge.ts)** — Inject messages + capture agent responses via Gateway WS
+- **[`examples/openclaw-sse-client.ts`](examples/openclaw-sse-client.ts)** — Drop-in SSE client for any OpenClaw agent
+
+See [BYOA.md → OpenClaw Agents](BYOA.md#openclaw-agents-bidirectional) for full configuration.
+
 ## Documentation
 
 - **[BYOA.md](BYOA.md)** — Full integration guide with examples in Node.js, Python, and bash
