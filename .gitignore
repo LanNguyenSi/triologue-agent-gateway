@@ -3,3 +3,4 @@ dist/
 .env
 .jwt-cache-*
 agents.json
+.read-tracker.json
