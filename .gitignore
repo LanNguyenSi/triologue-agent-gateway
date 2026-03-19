@@ -5,3 +5,4 @@ dist/
 agents.json
 gateway.log
 metrics.jsonl
+.read-tracker.json
