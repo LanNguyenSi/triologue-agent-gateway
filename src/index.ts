@@ -243,6 +243,33 @@ bridge.onMessage(async (msg) => {
   }
 });
 
+// ── task:assigned → inject into OpenClaw session ──────────────────────────
+bridge.onTaskAssigned(async (payload: any) => {
+  const assignedTo = payload.assignedTo ?? payload.task?.assignedTo;
+  if (!assignedTo) return;
+
+  // Find agent with openclaw-inject delivery that matches the assigned user
+  const agent = getAllAgents().find(
+    (a: AgentInfo) => a.userId === assignedTo && a.delivery === 'openclaw-inject'
+  );
+  if (!agent) return;
+
+  const task = payload.task ?? {};
+  const project = payload.project ?? {};
+  const injectMsg = [
+    `New task assigned to you: "${task.title ?? payload.taskId}"`,
+    project.name ? `Project: ${project.name}` : '',
+    task.description ? `Description: ${task.description}` : '',
+    task.priority ? `Priority: ${task.priority}` : '',
+    `Task ID: ${payload.taskId}`,
+    `\nUse: POST /api/agents/tasks/${payload.taskId}/context to get full context.`,
+  ].filter(Boolean).join('\n');
+
+  injectToSession(injectMsg)
+    .then(() => console.log(`[task:assigned] ✅ Injected task ${payload.taskId} → ${agent.mentionKey}`))
+    .catch((err: Error) => console.warn(`[task:assigned] ⚠️ ${err.message}`));
+});
+
 // ── REST: Agent sends a message ──
 
 app.post('/send', async (req, res) => {

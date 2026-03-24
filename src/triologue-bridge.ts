@@ -35,11 +35,14 @@ type MessageCallback = (msg: {
   timestamp: string;
 }) => void;
 
+type TaskAssignedCallback = (payload: any) => void;
+
 export class TriologueBridge {
   private config: BridgeConfig;
   private socket: Socket | null = null;
   private jwtToken: string | null = null;
   private onMessageCb: MessageCallback | null = null;
+  private onTaskAssignedCb: TaskAssignedCallback | null = null;
   private cachePath: string;
   private reconnecting = false;
   private reconnectAttempts = 0;
@@ -55,6 +58,10 @@ export class TriologueBridge {
 
   onMessage(cb: MessageCallback): void {
     this.onMessageCb = cb;
+  }
+
+  onTaskAssigned(cb: TaskAssignedCallback): void {
+    this.onTaskAssignedCb = cb;
   }
 
   async connect(): Promise<void> {
@@ -129,6 +136,13 @@ export class TriologueBridge {
           roomName: raw.roomName,
           timestamp: raw.createdAt ?? new Date().toISOString(),
         });
+      });
+
+      this.socket.on('task:assigned', (payload: any) => {
+        console.log(`📋 Task assigned: task=${payload.taskId} to=${payload.task?.assignedTo}`);
+        if (this.onTaskAssignedCb) {
+          this.onTaskAssignedCb(payload);
+        }
       });
 
       // Timeout for initial connect
