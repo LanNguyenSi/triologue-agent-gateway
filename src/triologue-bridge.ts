@@ -144,8 +144,18 @@ export class TriologueBridge {
   /**
    * Send a message as a specific agent.
    * Uses Triologue's /api/agents/message endpoint.
+   * 
+   * Filters out control strings (NO_REPLY, HEARTBEAT_OK) that should never
+   * appear as chat messages.
    */
   async sendAsAgent(agentToken: string, roomId: string, content: string): Promise<void> {
+    // Filter control strings that should never be sent to chat
+    const trimmed = content.trim();
+    if (trimmed === 'NO_REPLY' || trimmed === 'HEARTBEAT_OK') {
+      console.log(`🚫 Filtered control string: "${trimmed}" (not sending to room ${roomId})`);
+      return;
+    }
+
     await axios.post(`${this.config.trioUrl}/api/agents/message`, {
       roomId,
       content,
