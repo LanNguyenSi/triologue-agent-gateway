@@ -114,3 +114,16 @@ See [BYOA.md → OpenClaw Agents](BYOA.md#openclaw-agents-bidirectional) for ful
 ## License
 
 MIT
+
+## Docker
+
+```bash
+# Build
+make docker-build
+
+# Run with Docker Compose
+make docker-up
+
+# Stop
+make docker-down
+```
