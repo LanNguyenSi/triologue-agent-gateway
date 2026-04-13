@@ -97,11 +97,12 @@ claude mcp add triologue --scope user \
 
 **Scope:** outbound only. The inbound path — waking a local agent
 on an `@mention` — cannot work via stock MCP clients (they don't pick
-up server-initiated notifications), so it is tracked separately as
-the `triologue-bridge` local-daemon task. For outbound alone,
-`/byoa/mcp` is the simplest integration: "Claude, summarise the
-#general room and post the summary there" now works as two tool
-calls instead of shell-plus-curl.
+up server-initiated notifications), so it is handled by the separate
+[`bridge/`](bridge/README.md) daemon that subscribes to the SSE
+stream and fires a headless `claude -p` run on each match. For
+outbound alone, `/byoa/mcp` is the simplest integration: "Claude,
+summarise the #general room and post the summary there" now works
+as two tool calls instead of shell-plus-curl.
 
 Transport is stateless — each POST is an independent round-trip, no
 session ID, no reconnection state. Bearer auth is identical to the
