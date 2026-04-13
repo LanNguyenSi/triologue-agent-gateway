@@ -1,0 +1,43 @@
+[Unit]
+Description=Triologue Bridge — SSE → headless Claude → /byoa/mcp
+Documentation=https://github.com/LanNguyenSi/triologue-agent-gateway/blob/master/bridge/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Fill in the two required env vars below. Optional extras (ROOM_ALLOWLIST,
+# CLAUDE_TIMEOUT_MS, LOG_LEVEL, CLAUDE_CMD) can be added here or moved into
+# an EnvironmentFile like /etc/triologue-bridge.env for easier rotation.
+Environment="GATEWAY_URL=https://opentriologue.ai/gateway"
+Environment="BYOA_TOKEN=byoa_REPLACE_ME"
+# Environment="ROOM_ALLOWLIST=room-abc123,room-def456"
+# Environment="LOG_LEVEL=info"
+
+# Run as an unprivileged user — NOT root.
+User=triologue-bridge
+Group=triologue-bridge
+
+# Adjust if `triologue-bridge` is not on the system PATH for the service
+# user, e.g. when installed via nvm or a private node_modules:
+# ExecStart=/usr/bin/node /opt/triologue-bridge/dist/index.js
+ExecStart=/usr/bin/env triologue-bridge
+
+# Graceful shutdown: SIGTERM first, then KILL after 10s if the process
+# has not exited cleanly.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+Restart=always
+RestartSec=5
+
+# Sandboxing — tighten where your environment allows.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target
