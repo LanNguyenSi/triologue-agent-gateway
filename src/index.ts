@@ -21,6 +21,7 @@ import { injectToSession } from './openclaw-inject';
 import { loadReadTracker, getLastSeenMessageId, markMessageSeen } from './read-tracker';
 import { metrics } from './metrics';
 import { sseRouter, shutdownSSE, setBridge as setSSEBridge, hasSSEClient, fanoutToSSEClient } from './byoa-sse';
+import { mcpRouter, setBridge as setMCPBridge } from './byoa-mcp';
 import type { AgentInfo, WsClient } from './types';
 
 // ── Config ──
@@ -48,6 +49,10 @@ app.use(express.json());
 
 // Mount SSE + REST prototype routes
 app.use('/byoa/sse', sseRouter);
+
+// Mount MCP Streamable-HTTP endpoint (outbound only — see byoa-mcp.ts
+// for the scope-vs-inbound rationale).
+app.use('/byoa/mcp', mcpRouter);
 
 const server = createServer(app);
 
@@ -581,6 +586,7 @@ async function start(): Promise<void> {
   try {
     await bridge.connect();
     setSSEBridge(bridge); // Inject bridge into SSE module for message sending
+    setMCPBridge(bridge); // Inject bridge into MCP module for tool handlers
   } catch (err: any) {
     console.error(`❌ Failed to connect to Triologue: ${err.message}`);
     process.exit(1);
