@@ -1,10 +1,11 @@
 /**
  * Webhook dispatch with retry logic.
- * 
+ *
  * Retries up to MAX_RETRIES times with exponential backoff.
  * Logs success/failure per attempt.
  */
 
+import { createHmac } from 'node:crypto';
 import { metrics } from './metrics';
 
 const MAX_RETRIES = 3;
@@ -17,6 +18,37 @@ export interface WebhookPayload {
   agentKey: string; // for logging
   agentId?: string; // for metrics
   roomId?: string;
+}
+
+/**
+ * Sign a webhook body with HMAC-SHA256 over `${timestamp}.${body}` using
+ * UTF-8 bytes. Returns the signature header value in the format
+ * `t=<ts>,v1=<hex>`, plus the raw timestamp so the caller can emit a
+ * matching `X-Triologue-Timestamp` header.
+ *
+ * Verifiers on the receiver side:
+ *   1. Parse `t` and `v1` from the signature header.
+ *   2. Reject if `|now - t| > 5 minutes` (replay window).
+ *   3. Recompute HMAC over `${t}.${rawBody}` with their copy of the
+ *      agent secret and compare in constant time.
+ *
+ * UTF-8 is the canonical encoding for both the timestamp and the body
+ * before HMAC; non-ASCII bodies must serialize the same way on both
+ * ends (JSON.stringify output is UTF-8 by default in Node/V8).
+ */
+export interface WebhookSignature {
+  timestamp: string; // unix milliseconds as decimal string
+  signature: string; // `t=<ts>,v1=<hex>`
+}
+
+export function signWebhook(
+  secret: string,
+  body: string,
+  timestampMs: number = Date.now(),
+): WebhookSignature {
+  const t = String(timestampMs);
+  const mac = createHmac('sha256', secret).update(`${t}.${body}`, 'utf8').digest('hex');
+  return { timestamp: t, signature: `t=${t},v1=${mac}` };
 }
 
 export async function dispatchWebhook(payload: WebhookPayload): Promise<boolean> {
