@@ -14,7 +14,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAgentByUsername, getAllAgents, startSync, stopSync } from './auth';
-import { dispatchWebhook } from './webhook-dispatch';
+import { dispatchWebhook, signWebhook } from './webhook-dispatch';
 import { TriologueBridge } from './triologue-bridge';
 import { shouldDeliver } from './loop-guard';
 import { injectToSession } from './openclaw-inject';
@@ -233,12 +233,23 @@ bridge.onMessage(async (msg) => {
       context: contextMessages, // NEW: Include unread messages
     });
 
+    // HMAC-sign the body with the agent secret. During the migration
+    // window we continue to send `X-Triologue-Secret` so bots that
+    // haven't adopted verification yet keep working; new bots should
+    // ignore the plaintext header and verify the signature. The
+    // legacy header will be removed in a future major release — see
+    // BYOA.md "Webhook Signature Verification" for timing.
+    const webhookSecret = agent.webhookSecret ?? '';
+    const { timestamp, signature } = signWebhook(webhookSecret, payload);
+
     dispatchWebhook({
       url: agent.webhookUrl,
       headers: {
         'Content-Type': 'application/json',
-        'X-Triologue-Secret': agent.webhookSecret ?? '',
+        'X-Triologue-Secret': webhookSecret,
         'X-Triologue-Agent': agent.mentionKey,
+        'X-Triologue-Timestamp': timestamp,
+        'X-Triologue-Signature': signature,
       },
       body: payload,
       agentKey: agent.mentionKey,

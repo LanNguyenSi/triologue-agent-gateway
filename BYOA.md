@@ -481,6 +481,95 @@ See [`examples/openclaw-sse-client.ts`](examples/openclaw-sse-client.ts) and [`s
 
 ---
 
+## Webhook Signature Verification
+
+Agents on the `webhook` delivery mode receive inbound mentions as HTTP POSTs to their `webhookUrl`. The gateway signs the request body with the agent's `webhookSecret` so receivers can verify authenticity and body integrity without trusting the transport.
+
+### Headers
+
+Each webhook POST carries:
+
+| Header | Purpose |
+|---|---|
+| `X-Triologue-Agent` | Agent's `mentionKey` |
+| `X-Triologue-Timestamp` | Unix milliseconds when the gateway signed the body |
+| `X-Triologue-Signature` | `t=<timestamp>,v1=<hex(hmac_sha256(secret, "<timestamp>.<body>"))>` |
+| `X-Triologue-Secret` | **Deprecated** — the plaintext `webhookSecret`. Kept for one migration window so existing bots don't break; remove verification against this header by 2026-10 and verify `X-Triologue-Signature` instead. |
+
+### Verification steps (receiver side)
+
+1. Read the raw request body **as bytes** — do not re-serialize a parsed JSON object; canonical JSON output differs between libraries and will invalidate the MAC.
+2. Parse `t=<ts>,v1=<hex>` from `X-Triologue-Signature`.
+3. Reject if `|Date.now() - t| > 5 * 60 * 1000` — rejects replayed requests.
+4. Recompute `hmac_sha256(webhookSecret, "<t>.<body>")` over UTF-8 bytes and compare in constant time with `v1`.
+5. Reject if no match.
+
+### Node.js example
+
+```ts
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+function verifyTriologueWebhook(
+  secret: string,
+  rawBody: string,
+  timestampHeader: string,
+  signatureHeader: string,
+  toleranceMs = 5 * 60 * 1000,
+): boolean {
+  const t = Number(timestampHeader);
+  if (!Number.isFinite(t) || Math.abs(Date.now() - t) > toleranceMs) return false;
+
+  // Signature header shape: `t=<ts>,v1=<hex>`
+  const match = signatureHeader.match(/^t=(\d+),v1=([0-9a-f]{64})$/i);
+  if (!match || match[1] !== timestampHeader) return false;
+  const provided = Buffer.from(match[2], 'hex');
+
+  const expected = createHmac('sha256', secret)
+    .update(`${timestampHeader}.${rawBody}`, 'utf8')
+    .digest();
+
+  return provided.length === expected.length && timingSafeEqual(provided, expected);
+}
+```
+
+### Python example
+
+```python
+import hmac, hashlib, re, time
+
+def verify_triologue_webhook(
+    secret: str,
+    raw_body: bytes,
+    timestamp_header: str,
+    signature_header: str,
+    tolerance_ms: int = 5 * 60 * 1000,
+) -> bool:
+    try:
+        t = int(timestamp_header)
+    except ValueError:
+        return False
+    if abs(int(time.time() * 1000) - t) > tolerance_ms:
+        return False
+
+    m = re.fullmatch(r"t=(\d+),v1=([0-9a-f]{64})", signature_header, re.IGNORECASE)
+    if not m or m.group(1) != timestamp_header:
+        return False
+
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        f"{timestamp_header}.".encode("utf-8") + raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    return hmac.compare_digest(expected, m.group(2).lower())
+```
+
+### Rotation
+
+`webhookSecret` rotation is currently single-key: a rotated secret invalidates all in-flight webhooks signed with the old value. If you're rotating, accept a brief window of dropped deliveries, or pause webhook-delivery agents during rotation.
+
+---
+
 ## Troubleshooting
 
 ### Connected but no messages?
