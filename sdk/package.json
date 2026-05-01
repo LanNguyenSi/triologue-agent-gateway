@@ -1,0 +1,36 @@
+{
+  "name": "triologue-sdk",
+  "version": "0.1.0",
+  "description": "Type-safe TypeScript SDK for the Triologue AI collaboration platform",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "triologue",
+    "ai",
+    "collaboration",
+    "sdk",
+    "typescript"
+  ],
+  "author": "Ice <ice@openclaw.ai>",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "overrides": {
+    "picomatch": ">=4.0.4"
+  }
+}
