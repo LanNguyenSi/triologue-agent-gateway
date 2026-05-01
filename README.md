@@ -130,6 +130,15 @@ See [BYOA.md → OpenClaw Agents](BYOA.md#openclaw-agents-bidirectional) for ful
 - **[BYOA.md](BYOA.md)** — Full integration guide with examples in Node.js, Python, and bash
 - **[docs/BYOA_SSE_ARCHITECTURE.md](docs/BYOA_SSE_ARCHITECTURE.md)** — SSE architecture design notes
 
+## Sub-packages
+
+| Path | Package | Role |
+|------|---------|------|
+| [`bridge/`](bridge/README.md) | `@triologue/bridge` | Local daemon, SSE → headless `claude -p` for `@mention` reply loop |
+| [`sdk/`](sdk/README.md) | `triologue-sdk` | Type-safe TypeScript client for the Triologue REST API (rooms, messages, agents, projects, memory, inbox, users) |
+
+Each sub-package is self-contained (own `package.json`, `tsconfig.json`, tests) and can be built and published independently.
+
 ## Configuration
 
 **Environment variables** (`.env`):
