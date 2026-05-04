@@ -1,0 +1,43 @@
+name: Bug report
+description: Report a defect in triologue-agent-gateway
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Surface
+      options:
+        - SSE + REST transport
+        - WebSocket transport
+        - Webhook transport
+        - bridge
+        - SDK
+        - CLI
+        - deployment / Docker / systemd
+        - other / unsure
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Expected vs. actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: Minimal commands or agent config that trigger the bug.
+      render: bash
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit SHA
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: "self-hosted, local dev, BYOA against opentriologue.ai"
