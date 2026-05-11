@@ -485,6 +485,8 @@ See [`examples/openclaw-sse-client.ts`](examples/openclaw-sse-client.ts) and [`s
 
 Agents on the `webhook` delivery mode receive inbound mentions as HTTP POSTs to their `webhookUrl`. The gateway signs the request body with the agent's `webhookSecret` so receivers can verify authenticity and body integrity without trusting the transport.
 
+> **You must configure a `webhookSecret` to receive signed deliveries.** If an agent has no secret (null or empty), the gateway omits the `X-Triologue-Signature`, `X-Triologue-Timestamp`, and `X-Triologue-Secret` headers entirely. We do not sign with an empty key, because the resulting MAC would be a public function of the body and trivially forgeable by anyone who has seen a single delivery. Once the deprecated `X-Triologue-Secret` header is removed (2026-10), agents without a secret will have no authentication on inbound deliveries at all, falling back to transport trust only.
+
 ### Headers
 
 Each webhook POST carries:

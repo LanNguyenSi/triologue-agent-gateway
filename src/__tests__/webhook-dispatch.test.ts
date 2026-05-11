@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createHmac } from 'node:crypto';
-import { signWebhook } from '../webhook-dispatch.js';
+import { signWebhook, buildDispatchHeaders } from '../webhook-dispatch.js';
 
 describe('signWebhook', () => {
   const secret = 'test-agent-secret-abc123';
@@ -89,5 +89,61 @@ describe('signWebhook', () => {
       .update(`${fakeTs}.${body}`, 'utf8')
       .digest('hex');
     expect(signature.endsWith(`,v1=${attackerAttempt}`)).toBe(false);
+  });
+});
+
+describe('buildDispatchHeaders', () => {
+  const body = '{"messageId":"m1","content":"hi"}';
+  const fixedTs = 1_700_000_000_000;
+
+  it('emits Signature/Timestamp/legacy-Secret headers when agent has a secret', () => {
+    const headers = buildDispatchHeaders(
+      { mentionKey: '@bot', webhookSecret: 'abc123' },
+      body,
+      fixedTs,
+    );
+    expect(headers['Content-Type']).toBe('application/json');
+    expect(headers['X-Triologue-Agent']).toBe('@bot');
+    expect(headers['X-Triologue-Secret']).toBe('abc123');
+    expect(headers['X-Triologue-Timestamp']).toBe('1700000000000');
+    expect(headers['X-Triologue-Signature']).toMatch(/^t=1700000000000,v1=[0-9a-f]{64}$/);
+  });
+
+  it('omits Signature/Timestamp/legacy-Secret when webhookSecret is null', () => {
+    const headers = buildDispatchHeaders(
+      { mentionKey: '@bot', webhookSecret: null },
+      body,
+      fixedTs,
+    );
+    expect(Object.keys(headers).sort()).toEqual(['Content-Type', 'X-Triologue-Agent']);
+    expect(headers['X-Triologue-Signature']).toBeUndefined();
+    expect(headers['X-Triologue-Timestamp']).toBeUndefined();
+    expect(headers['X-Triologue-Secret']).toBeUndefined();
+  });
+
+  it('omits Signature/Timestamp/legacy-Secret when webhookSecret is an empty string', () => {
+    // Regression guard: the old code coerced `null ?? ''` and signed with
+    // an empty key, producing a public, forgeable signature. This must
+    // never happen.
+    const headers = buildDispatchHeaders(
+      { mentionKey: '@bot', webhookSecret: '' },
+      body,
+      fixedTs,
+    );
+    expect(headers['X-Triologue-Signature']).toBeUndefined();
+    expect(headers['X-Triologue-Timestamp']).toBeUndefined();
+    expect(headers['X-Triologue-Secret']).toBeUndefined();
+  });
+
+  it('signature matches an independent signWebhook computation', () => {
+    const secret = 's3cr3t';
+    const headers = buildDispatchHeaders(
+      { mentionKey: '@bot', webhookSecret: secret },
+      body,
+      fixedTs,
+    );
+    const expected = signWebhook(secret, body, fixedTs);
+    expect(headers['X-Triologue-Timestamp']).toBe(expected.timestamp);
+    expect(headers['X-Triologue-Signature']).toBe(expected.signature);
   });
 });

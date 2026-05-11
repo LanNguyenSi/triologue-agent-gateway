@@ -14,7 +14,7 @@ import express from 'express';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAgentByUsername, getAllAgents, startSync, stopSync } from './auth';
-import { dispatchWebhook, signWebhook } from './webhook-dispatch';
+import { dispatchWebhook, buildDispatchHeaders } from './webhook-dispatch';
 import { TriologueBridge } from './triologue-bridge';
 import { shouldDeliver } from './loop-guard';
 import { injectToSession } from './openclaw-inject';
@@ -239,18 +239,11 @@ bridge.onMessage(async (msg) => {
     // ignore the plaintext header and verify the signature. The
     // legacy header will be removed in a future major release — see
     // BYOA.md "Webhook Signature Verification" for timing.
-    const webhookSecret = agent.webhookSecret ?? '';
-    const { timestamp, signature } = signWebhook(webhookSecret, payload);
-
+    // Agents without a webhookSecret get neither header pair: signing
+    // with an empty key is forgeable and worse than no signature.
     dispatchWebhook({
       url: agent.webhookUrl,
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Triologue-Secret': webhookSecret,
-        'X-Triologue-Agent': agent.mentionKey,
-        'X-Triologue-Timestamp': timestamp,
-        'X-Triologue-Signature': signature,
-      },
+      headers: buildDispatchHeaders(agent, payload),
       body: payload,
       agentKey: agent.mentionKey,
       agentId: agent.userId,

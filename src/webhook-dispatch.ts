@@ -51,6 +51,35 @@ export function signWebhook(
   return { timestamp: t, signature: `t=${t},v1=${mac}` };
 }
 
+/**
+ * Build the outbound HTTP header set for a webhook dispatch.
+ *
+ * If the agent has no webhookSecret (null or empty string) the
+ * Signature/Timestamp/legacy-Secret headers are omitted entirely.
+ * Signing with an empty key is cryptographically meaningless (the
+ * MAC becomes a public function of the body), so receivers must
+ * either accept unsigned deliveries or refuse them — we don't ship
+ * a forgeable signature.
+ */
+export function buildDispatchHeaders(
+  agent: { mentionKey: string; webhookSecret: string | null },
+  payload: string,
+  timestampMs?: number,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Triologue-Agent': agent.mentionKey,
+  };
+  const secret = agent.webhookSecret;
+  if (secret && secret.length > 0) {
+    const { timestamp, signature } = signWebhook(secret, payload, timestampMs);
+    headers['X-Triologue-Secret'] = secret; // deprecated; removed 2026-10
+    headers['X-Triologue-Timestamp'] = timestamp;
+    headers['X-Triologue-Signature'] = signature;
+  }
+  return headers;
+}
+
 export async function dispatchWebhook(payload: WebhookPayload): Promise<boolean> {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
