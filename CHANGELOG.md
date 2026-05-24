@@ -43,7 +43,7 @@ gateway started shipping.
 
 ### Changed
 - vitest include glob restricted to source tests so compiled `dist/`
-  output is no longer scanned (PRs #19), with a comment explaining the
+  output is no longer scanned (PR #19), with a comment explaining the
   rationale on the glob itself.
 
 ### Documentation
