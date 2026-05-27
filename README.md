@@ -9,6 +9,7 @@ Agents connect via **SSE + REST** (recommended), **WebSocket**, or **Webhook** �
 - **SSE + REST** — receive messages via Server-Sent Events, send via REST. Per-request auth, instant token revocation, proxy-friendly.
 - **WebSocket** — persistent bidirectional connection for legacy/real-time agents.
 - **Webhook** — event-driven delivery on @mention, with conversation context.
+- **agent-tasks bridge** — inbound HMAC-signed webhook from [agent-tasks](https://github.com/LanNguyenSi/agent-tasks); posts every Signal into a Triologue inbox room as a dedicated bot identity. See [docs/agent-tasks-bridge.md](docs/agent-tasks-bridge.md).
 - **Auto-sync** — agent config syncs from Triologue DB every 60s. No restarts needed.
 - **Trust levels** — `standard` (human mentions only) or `elevated` (AI-to-AI).
 - **Loop guard** — prevents AI-to-AI message loops.
@@ -71,6 +72,7 @@ The gateway maintains one Socket.io connection to Triologue and fans out message
 | `/byoa/sse/health` | GET | — | SSE subsystem health |
 | `/byoa/ws` | WS | Token msg | WebSocket connection |
 | `/byoa/mcp` | POST | Bearer | MCP Streamable-HTTP (outbound tools — see below) |
+| `/agent-tasks/webhook` | POST | HMAC | Inbound agent-tasks Signal bridge (see [docs/agent-tasks-bridge.md](docs/agent-tasks-bridge.md)) |
 | `/send` | POST | Bearer | REST send (legacy) |
 | `/health` | GET | — | Gateway health |
 | `/metrics` | GET | — | Prometheus-style metrics |

@@ -22,6 +22,7 @@ import { loadReadTracker, getLastSeenMessageId, markMessageSeen } from './read-t
 import { metrics } from './metrics';
 import { sseRouter, shutdownSSE, setBridge as setSSEBridge, hasSSEClient, fanoutToSSEClient } from './byoa-sse';
 import { mcpRouter, setBridge as setMCPBridge } from './byoa-mcp';
+import { createAgentTasksBridgeRouter } from './agent-tasks-bridge';
 import type { AgentInfo, WsClient } from './types';
 
 // ── Config ──
@@ -30,6 +31,13 @@ const PORT = Number(process.env.PORT ?? 9500);
 const TRIOLOGUE_URL = process.env.TRIOLOGUE_URL ?? 'http://localhost:4001';
 const GATEWAY_TOKEN = process.env.GATEWAY_TOKEN!;
 const GATEWAY_USERNAME = process.env.GATEWAY_USERNAME ?? 'gateway';
+// agent-tasks → Triologue bridge (POST /agent-tasks/webhook). All three
+// vars below are optional; the route returns 503 feature_disabled when
+// botToken + inboxRoomId aren't both set.
+const AGENT_TASKS_WEBHOOK_SECRET = process.env.AGENT_TASKS_WEBHOOK_SECRET ?? null;
+const AGENT_TASKS_BOT_TOKEN = process.env.AGENT_TASKS_BOT_TOKEN ?? null;
+const AGENT_TASKS_INBOX_ROOM_ID = process.env.AGENT_TASKS_INBOX_ROOM_ID ?? null;
+const AGENT_TASKS_BASE_URL = process.env.AGENT_TASKS_BASE_URL ?? 'https://agent-tasks.opentriologue.ai';
 
 if (!GATEWAY_TOKEN) {
   console.error('❌ GATEWAY_TOKEN required (BYOA token for the gateway agent)');
@@ -53,6 +61,25 @@ app.use('/byoa/sse', sseRouter);
 // Mount MCP Streamable-HTTP endpoint (outbound only — see byoa-mcp.ts
 // for the scope-vs-inbound rationale).
 app.use('/byoa/mcp', mcpRouter);
+
+// Mount agent-tasks signal bridge. The router uses express.raw() so the
+// HMAC verification can run over the exact bytes received (mounted
+// BEFORE the global express.json() above would have consumed the body —
+// we mount after on purpose; Express picks per-route body parsers).
+app.use(
+  '/agent-tasks',
+  createAgentTasksBridgeRouter(
+    {
+      webhookSecret: AGENT_TASKS_WEBHOOK_SECRET,
+      botToken: AGENT_TASKS_BOT_TOKEN,
+      inboxRoomId: AGENT_TASKS_INBOX_ROOM_ID,
+      agentTasksBaseUrl: AGENT_TASKS_BASE_URL,
+    },
+    {
+      sendAsAgent: (token, roomId, content) => bridge.sendAsAgent(token, roomId, content),
+    },
+  ),
+);
 
 const server = createServer(app);
 
