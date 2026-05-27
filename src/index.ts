@@ -22,6 +22,7 @@ import { loadReadTracker, getLastSeenMessageId, markMessageSeen } from './read-t
 import { metrics } from './metrics';
 import { sseRouter, shutdownSSE, setBridge as setSSEBridge, hasSSEClient, fanoutToSSEClient } from './byoa-sse';
 import { mcpRouter, setBridge as setMCPBridge } from './byoa-mcp';
+import { createAgentTasksBridgeRouter } from './agent-tasks-bridge';
 import type { AgentInfo, WsClient } from './types';
 
 // ── Config ──
@@ -30,6 +31,13 @@ const PORT = Number(process.env.PORT ?? 9500);
 const TRIOLOGUE_URL = process.env.TRIOLOGUE_URL ?? 'http://localhost:4001';
 const GATEWAY_TOKEN = process.env.GATEWAY_TOKEN!;
 const GATEWAY_USERNAME = process.env.GATEWAY_USERNAME ?? 'gateway';
+// agent-tasks → Triologue bridge (POST /agent-tasks/webhook). All three
+// vars below are optional; the route returns 503 feature_disabled when
+// botToken + inboxRoomId aren't both set.
+const AGENT_TASKS_WEBHOOK_SECRET = process.env.AGENT_TASKS_WEBHOOK_SECRET ?? null;
+const AGENT_TASKS_BOT_TOKEN = process.env.AGENT_TASKS_BOT_TOKEN ?? null;
+const AGENT_TASKS_INBOX_ROOM_ID = process.env.AGENT_TASKS_INBOX_ROOM_ID ?? null;
+const AGENT_TASKS_BASE_URL = process.env.AGENT_TASKS_BASE_URL ?? 'https://agent-tasks.opentriologue.ai';
 
 if (!GATEWAY_TOKEN) {
   console.error('❌ GATEWAY_TOKEN required (BYOA token for the gateway agent)');
@@ -45,6 +53,29 @@ loadReadTracker();
 // ── Express ──
 
 const app = express();
+
+// Mount agent-tasks signal bridge BEFORE the global express.json(). The
+// bridge's own router uses express.raw() so the HMAC verification can
+// run over the exact bytes received; if the global JSON parser ran
+// first it would consume the body and HMAC would always fail. Mount
+// order is load-bearing: do not move below.
+app.use(
+  '/agent-tasks',
+  createAgentTasksBridgeRouter(
+    {
+      webhookSecret: AGENT_TASKS_WEBHOOK_SECRET,
+      botToken: AGENT_TASKS_BOT_TOKEN,
+      inboxRoomId: AGENT_TASKS_INBOX_ROOM_ID,
+      agentTasksBaseUrl: AGENT_TASKS_BASE_URL,
+    },
+    {
+      sendAsAgent: (token, roomId, content) => bridge.sendAsAgent(token, roomId, content),
+    },
+  ),
+);
+
+// Global JSON parser for the rest of the gateway. Must NOT be mounted
+// above /agent-tasks (see comment there).
 app.use(express.json());
 
 // Mount SSE + REST prototype routes
@@ -302,6 +333,7 @@ app.post('/send', async (req, res) => {
 // ── REST: Health ──
 
 app.get('/health', (_, res) => {
+  const agentTasksBridgeEnabled = !!(AGENT_TASKS_BOT_TOKEN && AGENT_TASKS_INBOX_ROOM_ID);
   res.json({
     status: 'ok',
     connectedAgents: clients.size,
@@ -310,6 +342,13 @@ app.get('/health', (_, res) => {
       emoji: c.agent.emoji,
       connectedSince: new Date(c.connectedAt).toISOString(),
     })),
+    agentTasksBridge: {
+      enabled: agentTasksBridgeEnabled,
+      // `trustMode: true` means signed-only is OFF (no shared secret),
+      // so anyone hitting the bridge URL can post into the inbox room.
+      // Operators should set AGENT_TASKS_WEBHOOK_SECRET in prod.
+      trustMode: agentTasksBridgeEnabled && !AGENT_TASKS_WEBHOOK_SECRET,
+    },
     uptime: Math.floor(process.uptime()),
   });
 });
