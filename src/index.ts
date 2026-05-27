@@ -53,19 +53,12 @@ loadReadTracker();
 // ── Express ──
 
 const app = express();
-app.use(express.json());
 
-// Mount SSE + REST prototype routes
-app.use('/byoa/sse', sseRouter);
-
-// Mount MCP Streamable-HTTP endpoint (outbound only — see byoa-mcp.ts
-// for the scope-vs-inbound rationale).
-app.use('/byoa/mcp', mcpRouter);
-
-// Mount agent-tasks signal bridge. The router uses express.raw() so the
-// HMAC verification can run over the exact bytes received (mounted
-// BEFORE the global express.json() above would have consumed the body —
-// we mount after on purpose; Express picks per-route body parsers).
+// Mount agent-tasks signal bridge BEFORE the global express.json(). The
+// bridge's own router uses express.raw() so the HMAC verification can
+// run over the exact bytes received; if the global JSON parser ran
+// first it would consume the body and HMAC would always fail. Mount
+// order is load-bearing: do not move below.
 app.use(
   '/agent-tasks',
   createAgentTasksBridgeRouter(
@@ -80,6 +73,17 @@ app.use(
     },
   ),
 );
+
+// Global JSON parser for the rest of the gateway. Must NOT be mounted
+// above /agent-tasks (see comment there).
+app.use(express.json());
+
+// Mount SSE + REST prototype routes
+app.use('/byoa/sse', sseRouter);
+
+// Mount MCP Streamable-HTTP endpoint (outbound only — see byoa-mcp.ts
+// for the scope-vs-inbound rationale).
+app.use('/byoa/mcp', mcpRouter);
 
 const server = createServer(app);
 
@@ -329,6 +333,7 @@ app.post('/send', async (req, res) => {
 // ── REST: Health ──
 
 app.get('/health', (_, res) => {
+  const agentTasksBridgeEnabled = !!(AGENT_TASKS_BOT_TOKEN && AGENT_TASKS_INBOX_ROOM_ID);
   res.json({
     status: 'ok',
     connectedAgents: clients.size,
@@ -337,6 +342,13 @@ app.get('/health', (_, res) => {
       emoji: c.agent.emoji,
       connectedSince: new Date(c.connectedAt).toISOString(),
     })),
+    agentTasksBridge: {
+      enabled: agentTasksBridgeEnabled,
+      // `trustMode: true` means signed-only is OFF (no shared secret),
+      // so anyone hitting the bridge URL can post into the inbox room.
+      // Operators should set AGENT_TASKS_WEBHOOK_SECRET in prod.
+      trustMode: agentTasksBridgeEnabled && !AGENT_TASKS_WEBHOOK_SECRET,
+    },
     uptime: Math.floor(process.uptime()),
   });
 });

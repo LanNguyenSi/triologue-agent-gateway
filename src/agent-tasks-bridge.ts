@@ -27,7 +27,7 @@ import { Router, type Request, type Response } from 'express';
 import express from 'express';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
-// Re-declared here rather than imported across the package boundary —
+// Re-declared here rather than imported across the package boundary:
 // the wire format is the contract, not the sender's TS types.
 export type AgentTasksSignalType =
   | 'review_needed'
@@ -121,16 +121,6 @@ const TYPE_EMOJI: Record<AgentTasksSignalType, string> = {
   self_merge_notice: '🔀',
 };
 
-const TYPE_HEADLINE: Record<AgentTasksSignalType, string> = {
-  review_needed: 'review_needed',
-  changes_requested: 'changes_requested',
-  task_approved: 'task_approved',
-  task_assigned: 'task_assigned',
-  task_available: 'task_available',
-  task_force_transitioned: 'task_force_transitioned',
-  self_merge_notice: 'self_merge_notice',
-};
-
 /**
  * Render the Signal payload as a Markdown message suitable for posting
  * into a Triologue room. Format is intentionally compact: one block per
@@ -139,11 +129,10 @@ const TYPE_HEADLINE: Record<AgentTasksSignalType, string> = {
  */
 export function formatSignalMessage(payload: AgentTasksSignalPayload, agentTasksBaseUrl: string): string {
   const emoji = TYPE_EMOJI[payload.type] ?? '🔔';
-  const headline = TYPE_HEADLINE[payload.type] ?? payload.type;
   const ctx = payload.context;
   const lines: string[] = [];
 
-  lines.push(`${emoji} **${headline}** in *${ctx.projectSlug ?? payload.projectSlug}*`);
+  lines.push(`${emoji} **${payload.type}** in *${ctx.projectSlug ?? payload.projectSlug}*`);
   lines.push(`Task: ${ctx.taskTitle}`);
   if (ctx.prUrl) lines.push(`PR: ${ctx.prUrl}`);
   if (ctx.actor) lines.push(`Actor: ${ctx.actor.name} (${ctx.actor.type})`);
@@ -153,7 +142,11 @@ export function formatSignalMessage(payload: AgentTasksSignalPayload, agentTasks
   }
   if (ctx.forceTransition) {
     const ft = ctx.forceTransition;
-    lines.push(`Force: ${ft.from} → ${ft.to} (rules: ${ft.forcedRules.join(', ')})`);
+    // Validator only guarantees `forceTransition` is present; individual
+    // fields can be malformed. Guard the array access so a non-list
+    // `forcedRules` cannot crash the handler.
+    const rules = Array.isArray(ft.forcedRules) ? ft.forcedRules.join(', ') : '';
+    lines.push(`Force: ${ft.from} → ${ft.to} (rules: ${rules})`);
     if (ft.forceReason) lines.push(`Reason: ${ft.forceReason}`);
   }
 
@@ -171,7 +164,7 @@ function buildTaskLink(baseUrl: string, projectId: string, taskId: string): stri
 
 /**
  * Sanity-check the parsed JSON payload. We don't run a full Zod schema
- * here — the source of truth is the agent-tasks payload contract, and
+ * here , the source of truth is the agent-tasks payload contract, and
  * over-strict validation would reject legitimate future fields. We only
  * require the small set we actually read.
  */
@@ -209,7 +202,7 @@ export function createAgentTasksBridgeRouter(config: AgentTasksBridgeConfig, dep
   if (!featureEnabled) {
     log.warn?.('[agent-tasks-bridge] disabled: AGENT_TASKS_BOT_TOKEN and AGENT_TASKS_INBOX_ROOM_ID are both required');
   } else if (!config.webhookSecret) {
-    log.warn?.('[agent-tasks-bridge] AGENT_TASKS_WEBHOOK_SECRET unset — accepting unsigned webhooks (operator-trust mode)');
+    log.warn?.('[agent-tasks-bridge] AGENT_TASKS_WEBHOOK_SECRET unset , accepting unsigned webhooks (operator-trust mode)');
   }
 
   router.post(

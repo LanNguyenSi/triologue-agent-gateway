@@ -52,12 +52,30 @@ interface TestServer {
   error: ReturnType<typeof vi.fn>;
 }
 
-async function startServer(config: Partial<AgentTasksBridgeConfig> = {}): Promise<TestServer> {
+interface StartOptions {
+  config?: Partial<AgentTasksBridgeConfig>;
+  /**
+   * Production-shape harness: mounts `express.json()` AFTER the bridge,
+   * mirroring `src/index.ts`. Use this to catch body-parser ordering
+   * regressions (the bridge MUST be mounted before the global JSON
+   * parser, otherwise the body is consumed and HMAC verification sees
+   * an empty buffer).
+   */
+  withGlobalJsonParser?: 'before' | 'after' | 'none';
+}
+
+async function startServer(opts: StartOptions = {}): Promise<TestServer> {
+  const { config = {}, withGlobalJsonParser = 'none' } = opts;
   const sendAsAgent = vi.fn<AgentTasksBridgeDeps['sendAsAgent']>().mockResolvedValue(undefined);
   const warn = vi.fn();
   const info = vi.fn();
   const error = vi.fn();
   const app = express();
+  if (withGlobalJsonParser === 'before') {
+    // Demonstrates the production wiring bug: body parsed away before
+    // the bridge handler can read it. Used in one regression test.
+    app.use(express.json());
+  }
   app.use(
     '/agent-tasks',
     createAgentTasksBridgeRouter(
@@ -74,6 +92,11 @@ async function startServer(config: Partial<AgentTasksBridgeConfig> = {}): Promis
       },
     ),
   );
+  if (withGlobalJsonParser === 'after') {
+    // Production layout: bridge first, then the global json parser for
+    // every other route on the gateway.
+    app.use(express.json());
+  }
   return new Promise((resolve) => {
     const server = http.createServer(app);
     server.listen(0, '127.0.0.1', () => {
@@ -211,7 +234,7 @@ describe('createAgentTasksBridgeRouter — happy path', () => {
   });
 
   it('accepts without verification when no secret is configured (operator-trust mode), and warns at startup', async () => {
-    const srv = await startServer({ webhookSecret: null });
+    const srv = await startServer({ config: { webhookSecret: null } });
     try {
       // Startup warning fired once.
       expect(srv.warn).toHaveBeenCalledWith(
@@ -335,7 +358,7 @@ describe('createAgentTasksBridgeRouter — rejections', () => {
 
 describe('createAgentTasksBridgeRouter — feature-disabled state', () => {
   it('returns 503 when botToken is missing', async () => {
-    const srv = await startServer({ botToken: null });
+    const srv = await startServer({ config: { botToken: null } });
     try {
       const body = JSON.stringify(buildPayload());
       const res = await fetch(`${srv.url}/agent-tasks/webhook`, {
@@ -356,7 +379,7 @@ describe('createAgentTasksBridgeRouter — feature-disabled state', () => {
   });
 
   it('returns 503 when inboxRoomId is missing', async () => {
-    const srv = await startServer({ inboxRoomId: null });
+    const srv = await startServer({ config: { inboxRoomId: null } });
     try {
       const body = JSON.stringify(buildPayload());
       const res = await fetch(`${srv.url}/agent-tasks/webhook`, {
@@ -372,5 +395,65 @@ describe('createAgentTasksBridgeRouter — feature-disabled state', () => {
     } finally {
       await srv.close();
     }
+  });
+});
+
+describe('createAgentTasksBridgeRouter, body-parser ordering regression', () => {
+  it('happy path still works when express.json() is mounted AFTER the bridge (production layout)', async () => {
+    const srv = await startServer({ withGlobalJsonParser: 'after' });
+    try {
+      const body = JSON.stringify(buildPayload());
+      const res = await fetch(`${srv.url}/agent-tasks/webhook`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-AgentTasks-Signature': sign(body, SECRET),
+        },
+        body,
+      });
+      expect(res.status).toBe(202);
+      expect(srv.sendAsAgent).toHaveBeenCalledTimes(1);
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('HMAC FAILS when express.json() is mounted BEFORE the bridge (anti-pattern, documents the trap)', async () => {
+    // Demonstrates the regression: if someone moves the bridge mount below
+    // the global JSON parser, the body is consumed and the raw buffer
+    // arrives empty. Signature over an empty buffer never matches a
+    // signature computed over the real body, so the route 401s on every
+    // signed request and the bridge appears dead.
+    const srv = await startServer({ withGlobalJsonParser: 'before' });
+    try {
+      const body = JSON.stringify(buildPayload());
+      const res = await fetch(`${srv.url}/agent-tasks/webhook`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-AgentTasks-Signature': sign(body, SECRET),
+        },
+        body,
+      });
+      expect(res.status).toBe(401);
+      expect(srv.sendAsAgent).not.toHaveBeenCalled();
+    } finally {
+      await srv.close();
+    }
+  });
+});
+
+describe('formatSignalMessage, malformed forceTransition.forcedRules guard', () => {
+  it('does not crash when forcedRules is missing/non-array', () => {
+    const payload = buildPayload({
+      type: 'task_force_transitioned',
+      context: {
+        ...buildPayload().context,
+        // Intentionally invalid shape: validator only requires forceTransition
+        // exists, not that forcedRules is an array. Formatter must guard.
+        forceTransition: { from: 'a', to: 'b' } as unknown as AgentTasksSignalPayload['context']['forceTransition'],
+      },
+    });
+    expect(() => formatSignalMessage(payload, 'https://example')).not.toThrow();
   });
 });
