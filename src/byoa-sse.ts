@@ -316,19 +316,19 @@ function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
 // ── Resume: Replay missed messages from Redis ──
 
 async function replayMissedMessages(agentId: string, afterEventId: number, res: Response): Promise<void> {
-  // Scan all room keys for messages after the given event ID
-  const keys = await redis.keys('sse:messages:*');
+  // Scope replay to this agent's own stream only. The per-recipient key is
+  // written by fanoutToSSEClient, which runs once per authorized recipient
+  // after the full receiveMode/@mention/shouldDeliver filter (see index.ts).
+  // Never scan other agents' keys: that would leak cross-room/cross-tenant.
   const missed: Array<{ eventId: number; data: string }> = [];
 
-  for (const key of keys) {
-    // Get messages with score > afterEventId (score = eventId)
-    const entries = await redis.zrangebyscore(key, afterEventId + 1, '+inf');
-    for (const entry of entries) {
-      try {
-        const parsed = JSON.parse(entry);
-        missed.push({ eventId: parsed.eventId, data: entry });
-      } catch { /* skip malformed */ }
-    }
+  // Get messages with score > afterEventId (score = eventId)
+  const entries = await redis.zrangebyscore(`sse:replay:${agentId}`, afterEventId + 1, '+inf');
+  for (const entry of entries) {
+    try {
+      const parsed = JSON.parse(entry);
+      missed.push({ eventId: parsed.eventId, data: entry });
+    } catch { /* skip malformed */ }
   }
 
   // Sort by eventId and deliver
@@ -366,9 +366,13 @@ export async function fanoutToSSEClient(agentId: string, message: AgentMessage):
 
   const eventId = await redis.incr('sse:eventId');
 
-  // Persist in Redis for Last-Event-ID resume (24h TTL)
-  await redis.zadd(`sse:messages:${message.room}`, eventId, JSON.stringify({ ...message, eventId }));
-  await redis.expire(`sse:messages:${message.room}`, 86400);
+  // Persist per recipient for Last-Event-ID resume (24h TTL). This function is
+  // only invoked for agents that already passed the live-delivery filter, so a
+  // per-agent key contains exactly the messages this agent was authorized to
+  // receive. Replay reads this key only, preventing cross-room/tenant leakage.
+  const replayKey = `sse:replay:${agentId}`;
+  await redis.zadd(replayKey, eventId, JSON.stringify({ ...message, eventId }));
+  await redis.expire(replayKey, 86400);
 
   const sseData = formatSSE(eventId, 'message', message);
   for (const client of clients) {
