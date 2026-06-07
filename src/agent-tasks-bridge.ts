@@ -13,9 +13,12 @@
  *                   recipientAgentId, recipientUserId, context, createdAt }
  *
  * The signature is HMAC-SHA256 of the raw POST body using the project's
- * notificationWebhookSecret. We compare in constant time. If
- * AGENT_TASKS_WEBHOOK_SECRET is unset we accept without verification
- * (operator-trust mode) and log a warning once at startup.
+ * notificationWebhookSecret. We compare in constant time. The secure
+ * default is fail-closed: if AGENT_TASKS_WEBHOOK_SECRET is unset the
+ * bridge stays disabled and returns 503. Accepting unsigned webhooks
+ * (operator-trust mode) requires the explicit opt-in
+ * AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED=true, and we log a warning once at
+ * startup when that escape hatch is active.
  *
  * The formatted message is posted via the existing
  * `bridge.sendAsAgent(token, roomId, content)` helper using a dedicated
@@ -83,6 +86,14 @@ export interface AgentTasksBridgeConfig {
   inboxRoomId: string | null;
   /** Base URL of the agent-tasks UI for "open task" deep-links. Optional. */
   agentTasksBaseUrl: string;
+  /**
+   * Explicit opt-in escape hatch for operator-trust mode. When true AND no
+   * webhookSecret is set, the bridge accepts unsigned webhooks. Defaults to
+   * false (fail-closed): without a secret or this flag the bridge stays
+   * disabled and returns 503, so a missing secret can never silently leave
+   * the inbox open to unauthenticated POSTs.
+   */
+  allowUnsigned?: boolean;
 }
 
 export interface AgentTasksBridgeDeps {
@@ -198,11 +209,22 @@ export function createAgentTasksBridgeRouter(config: AgentTasksBridgeConfig, dep
   const router = Router();
   const log = deps.logger ?? { info: console.log, warn: console.warn, error: console.error };
 
-  const featureEnabled = !!(config.botToken && config.inboxRoomId);
-  if (!featureEnabled) {
+  // Fail-closed: a configured bridge MUST either verify HMAC signatures
+  // (webhookSecret set) or have the operator explicitly opt in to accepting
+  // unsigned webhooks (allowUnsigned). A missing secret alone leaves the
+  // bridge disabled rather than silently accepting unauthenticated POSTs.
+  const allowUnsigned = config.allowUnsigned === true;
+  const credsPresent = !!(config.botToken && config.inboxRoomId);
+  const authConfigured = !!config.webhookSecret || allowUnsigned;
+  const featureEnabled = credsPresent && authConfigured;
+  if (!credsPresent) {
     log.warn?.('[agent-tasks-bridge] disabled: AGENT_TASKS_BOT_TOKEN and AGENT_TASKS_INBOX_ROOM_ID are both required');
+  } else if (!authConfigured) {
+    log.warn?.(
+      '[agent-tasks-bridge] disabled: set AGENT_TASKS_WEBHOOK_SECRET, or AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED=true to accept unsigned webhooks (operator-trust mode)',
+    );
   } else if (!config.webhookSecret) {
-    log.warn?.('[agent-tasks-bridge] AGENT_TASKS_WEBHOOK_SECRET unset , accepting unsigned webhooks (operator-trust mode)');
+    log.warn?.('[agent-tasks-bridge] AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED=true , accepting unsigned webhooks (operator-trust mode)');
   }
 
   router.post(
@@ -217,6 +239,9 @@ export function createAgentTasksBridgeRouter(config: AgentTasksBridgeConfig, dep
 
       const rawBody: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from('', 'utf8');
 
+      // When a secret is configured we always verify. Reaching here without a
+      // secret is only possible in explicit operator-trust mode (allowUnsigned);
+      // otherwise featureEnabled is false and the 503 above already fired.
       if (config.webhookSecret) {
         const sigHeader = req.header('X-AgentTasks-Signature');
         if (!verifyAgentTasksSignature(rawBody, sigHeader, config.webhookSecret)) {

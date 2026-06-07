@@ -31,10 +31,14 @@ const PORT = Number(process.env.PORT ?? 9500);
 const TRIOLOGUE_URL = process.env.TRIOLOGUE_URL ?? 'http://localhost:4001';
 const GATEWAY_TOKEN = process.env.GATEWAY_TOKEN!;
 const GATEWAY_USERNAME = process.env.GATEWAY_USERNAME ?? 'gateway';
-// agent-tasks → Triologue bridge (POST /agent-tasks/webhook). All three
-// vars below are optional; the route returns 503 feature_disabled when
-// botToken + inboxRoomId aren't both set.
+// agent-tasks → Triologue bridge (POST /agent-tasks/webhook). The vars
+// below are optional; the route returns 503 feature_disabled until
+// botToken + inboxRoomId are both set AND auth is configured. Auth is
+// fail-closed: set AGENT_TASKS_WEBHOOK_SECRET to verify HMAC signatures,
+// or explicitly opt in to accepting unsigned webhooks (operator-trust
+// mode) with AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED=true.
 const AGENT_TASKS_WEBHOOK_SECRET = process.env.AGENT_TASKS_WEBHOOK_SECRET ?? null;
+const AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED = process.env.AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED === 'true';
 const AGENT_TASKS_BOT_TOKEN = process.env.AGENT_TASKS_BOT_TOKEN ?? null;
 const AGENT_TASKS_INBOX_ROOM_ID = process.env.AGENT_TASKS_INBOX_ROOM_ID ?? null;
 const AGENT_TASKS_BASE_URL = process.env.AGENT_TASKS_BASE_URL ?? 'https://agent-tasks.opentriologue.ai';
@@ -64,6 +68,7 @@ app.use(
   createAgentTasksBridgeRouter(
     {
       webhookSecret: AGENT_TASKS_WEBHOOK_SECRET,
+      allowUnsigned: AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED,
       botToken: AGENT_TASKS_BOT_TOKEN,
       inboxRoomId: AGENT_TASKS_INBOX_ROOM_ID,
       agentTasksBaseUrl: AGENT_TASKS_BASE_URL,
@@ -333,7 +338,10 @@ app.post('/send', async (req, res) => {
 // ── REST: Health ──
 
 app.get('/health', (_, res) => {
-  const agentTasksBridgeEnabled = !!(AGENT_TASKS_BOT_TOKEN && AGENT_TASKS_INBOX_ROOM_ID);
+  // Mirror the bridge router's fail-closed gate: enabled requires the BYOA
+  // creds AND configured auth (a secret, or the explicit unsigned opt-in).
+  const agentTasksAuthConfigured = !!AGENT_TASKS_WEBHOOK_SECRET || AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED;
+  const agentTasksBridgeEnabled = !!(AGENT_TASKS_BOT_TOKEN && AGENT_TASKS_INBOX_ROOM_ID) && agentTasksAuthConfigured;
   res.json({
     status: 'ok',
     connectedAgents: clients.size,
@@ -344,9 +352,10 @@ app.get('/health', (_, res) => {
     })),
     agentTasksBridge: {
       enabled: agentTasksBridgeEnabled,
-      // `trustMode: true` means signed-only is OFF (no shared secret),
-      // so anyone hitting the bridge URL can post into the inbox room.
-      // Operators should set AGENT_TASKS_WEBHOOK_SECRET in prod.
+      // `trustMode: true` means signed-only is OFF (no shared secret) but the
+      // operator opted in via AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED, so anyone
+      // hitting the bridge URL can post into the inbox room. Set
+      // AGENT_TASKS_WEBHOOK_SECRET in prod instead.
       trustMode: agentTasksBridgeEnabled && !AGENT_TASKS_WEBHOOK_SECRET,
     },
     uptime: Math.floor(process.uptime()),

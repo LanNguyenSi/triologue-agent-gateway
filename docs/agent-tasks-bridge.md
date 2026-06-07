@@ -33,17 +33,18 @@ The wire contract on the sender side is described in [agent-tasks/docs/notificat
 | 401 | `AGENT_TASKS_WEBHOOK_SECRET` is set and the signature is missing or wrong. Body: `{ error: "invalid_signature" }` |
 | 400 | Malformed JSON or required fields missing. Body: `{ error: "invalid_json" \| "invalid_payload", missing?: string[] }` |
 | 502 | The downstream Triologue send failed. Body: `{ error: "send_failed", signalId }` , the raw payload is intentionally not echoed back. |
-| 503 | The bridge is not configured (`AGENT_TASKS_BOT_TOKEN` or `AGENT_TASKS_INBOX_ROOM_ID` missing). Body: `{ error: "feature_disabled" }` |
+| 503 | The bridge is not configured: `AGENT_TASKS_BOT_TOKEN`/`AGENT_TASKS_INBOX_ROOM_ID` missing, or auth not configured (no `AGENT_TASKS_WEBHOOK_SECRET` and no `AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED=true`). Body: `{ error: "feature_disabled" }` |
 
 ## Configuration
 
-All three settings are optional. The bridge route returns 503 `feature_disabled` until both `AGENT_TASKS_BOT_TOKEN` and `AGENT_TASKS_INBOX_ROOM_ID` are set, so an operator can deploy the gateway without enabling the bridge.
+The bridge route returns 503 `feature_disabled` until both `AGENT_TASKS_BOT_TOKEN` and `AGENT_TASKS_INBOX_ROOM_ID` are set, so an operator can deploy the gateway without enabling the bridge. Auth is **fail-closed**: even with those two set, the bridge stays disabled until you either configure `AGENT_TASKS_WEBHOOK_SECRET` (HMAC verification) or explicitly opt in to accepting unsigned webhooks with `AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED=true`. A missing secret never silently leaves the inbox open.
 
 | Env var | Required for bridge? | Description |
 |---|---|---|
 | `AGENT_TASKS_BOT_TOKEN` | yes | BYOA bearer token for a dedicated "agent-tasks-bot" identity registered in Triologue Settings → My Agents. |
 | `AGENT_TASKS_INBOX_ROOM_ID` | yes | Triologue room id where formatted messages get posted. |
-| `AGENT_TASKS_WEBHOOK_SECRET` | strongly recommended for prod | Shared HMAC secret that matches the project's `notificationWebhookSecret` on the agent-tasks side. **If unset, anyone who knows the URL can post into the inbox room (no authentication).** Use only in private/dev deployments where the URL is not reachable from the internet, or accept that the inbox is open to spam. The bridge logs a one-time warning at startup and surfaces `agentTasksBridge.trustMode: true` in `/health` when in this state. |
+| `AGENT_TASKS_WEBHOOK_SECRET` | yes, unless `AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED=true` | Shared HMAC secret that matches the project's `notificationWebhookSecret` on the agent-tasks side. Required for the bridge to enable unless you explicitly opt in to operator-trust mode. |
+| `AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED` | no (default off) | Set to `true` to accept unsigned webhooks when no secret is set (operator-trust mode). **In this state anyone who knows the URL can post into the inbox room (no authentication).** Use only in private/dev deployments where the URL is not reachable from the internet, or accept that the inbox is open to spam. The bridge logs a one-time warning at startup and surfaces `agentTasksBridge.trustMode: true` in `/health` when in this state. |
 | `AGENT_TASKS_BASE_URL` | no | Base URL of the agent-tasks UI for "open task" deep-links inside the formatted message. Defaults to `https://agent-tasks.opentriologue.ai`. |
 
 ## One-time setup

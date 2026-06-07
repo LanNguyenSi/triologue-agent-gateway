@@ -233,12 +233,12 @@ describe('createAgentTasksBridgeRouter — happy path', () => {
     }
   });
 
-  it('accepts without verification when no secret is configured (operator-trust mode), and warns at startup', async () => {
-    const srv = await startServer({ config: { webhookSecret: null } });
+  it('accepts without verification only with the explicit allowUnsigned opt-in (operator-trust mode), and warns at startup', async () => {
+    const srv = await startServer({ config: { webhookSecret: null, allowUnsigned: true } });
     try {
       // Startup warning fired once.
       expect(srv.warn).toHaveBeenCalledWith(
-        expect.stringContaining('AGENT_TASKS_WEBHOOK_SECRET unset'),
+        expect.stringContaining('accepting unsigned webhooks'),
       );
       const body = JSON.stringify(buildPayload());
       const res = await fetch(`${srv.url}/agent-tasks/webhook`, {
@@ -248,6 +248,26 @@ describe('createAgentTasksBridgeRouter — happy path', () => {
       });
       expect(res.status).toBe(202);
       expect(srv.sendAsAgent).toHaveBeenCalled();
+    } finally {
+      await srv.close();
+    }
+  });
+
+  it('fails closed (503) when no secret is set and allowUnsigned is not opted in', async () => {
+    // Regression for the unsigned-webhook default: a missing secret must NOT
+    // silently leave the inbox open to unauthenticated POSTs.
+    const srv = await startServer({ config: { webhookSecret: null } });
+    try {
+      const body = JSON.stringify(buildPayload());
+      const res = await fetch(`${srv.url}/agent-tasks/webhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+      expect(res.status).toBe(503);
+      const responseBody = (await res.json()) as { error: string };
+      expect(responseBody.error).toBe('feature_disabled');
+      expect(srv.sendAsAgent).not.toHaveBeenCalled();
     } finally {
       await srv.close();
     }
