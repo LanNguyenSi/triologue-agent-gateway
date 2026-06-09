@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-09
+
+Security release closing the 2026-05-30 audit findings and a CVE sweep. The headline is a HIGH cross-tenant disclosure in the SSE reconnect replay path. No feature changes; the `v0.2.1` tag is the gateway app version and triggers the GitHub Release workflow.
+
+### Security
+
+- **HIGH: SSE reconnect replay leaked every room and tenant** (PR #25). `replayMissedMessages` scanned every `sse:messages:*` room key and sent the reconnecting agent all messages with an `eventId` above its `Last-Event-ID`, with no access control, so any authenticated agent could reconnect with `Last-Event-ID: 1` and receive the full firehose across all rooms and tenants, bypassing the `receiveMode` / `@mention` / `shouldDeliver` filters that gate live delivery. Replay is now keyed per recipient (`sse:replay:${agentId}`), written in `fanoutToSSEClient` only for agents that already passed the full live-delivery filter, so a reconnect reads only the messages that agent was authorized to receive.
+- **agent-tasks bridge webhook fails closed** (PR #28, finding #31). A missing `AGENT_TASKS_WEBHOOK_SECRET` previously accepted unauthenticated POSTs; the bridge is now disabled (503) when the secret is unset, and the operator-trust escape hatch moves behind an explicit `AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED=true` opt-in. `/health` `enabled` / `trustMode` and the docs are updated; regression test added.
+- **hono advanced to `4.12.23` via the lockfile** (4 MEDIUM CVEs: CVE-2026-47673 / 47674 / 47675 / 47676, PR #27). hono is a transitive dependency (of `@modelcontextprotocol/sdk`), so the fix is a lockfile resolution, not a direct range bump; the CVEs are patched in 4.12.21.
+- **vitest bumped to `>=4.1.0`** (CVE-2026-47429 / GHSA-5xrq-8626-4rwp, PR #26). devDependency in the gateway and the SDK; lockfiles regenerated.
+
 ## [0.2.0] - 2026-05-27
 
 **Headline: new `POST /agent-tasks/webhook` route that receives signed Signal webhooks from [agent-tasks](https://github.com/LanNguyenSi/agent-tasks) v0.18.0 and posts a formatted Markdown message into a configured Triologue inbox room as a dedicated `agent-tasks-bot` identity.** The bridge closes the last hop in the active-Claude-Code wake-up chain: agent-tasks createSignal → POST gateway /agent-tasks/webhook → bridge.sendAsAgent → room broadcast → SSE listener on a reviewer's session sees it without polling. Plus a dep-sweep for two CVEs.
