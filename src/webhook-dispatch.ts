@@ -13,8 +13,11 @@ const BASE_DELAY_MS = 1000; // 1s, 2s, 4s
 
 export interface WebhookPayload {
   url: string;
-  headers: Record<string, string>;
   body: string;
+  // Signing inputs — dispatchWebhook assembles the headers (incl. the HMAC
+  // signature) itself via buildDispatchHeaders, so no caller can forget to
+  // sign or tamper with X-Triologue-Signature.
+  agent: { mentionKey: string; webhookSecret: string | null };
   agentKey: string; // for logging
   agentId?: string; // for metrics
   roomId?: string;
@@ -81,11 +84,14 @@ export function buildDispatchHeaders(
 }
 
 export async function dispatchWebhook(payload: WebhookPayload): Promise<boolean> {
+  // Build the signed header set once, inside the helper, so every dispatch is
+  // signed identically and the call site cannot diverge.
+  const headers = buildDispatchHeaders(payload.agent, payload.body);
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const res = await fetch(payload.url, {
         method: 'POST',
-        headers: payload.headers,
+        headers,
         body: payload.body,
         signal: AbortSignal.timeout(10_000), // 10s timeout per attempt
       });
