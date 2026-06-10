@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createHmac } from 'node:crypto';
-import { signWebhook, buildDispatchHeaders } from '../webhook-dispatch.js';
+import { signWebhook, buildDispatchHeaders, dispatchWebhook } from '../webhook-dispatch.js';
 
 describe('signWebhook', () => {
   const secret = 'test-agent-secret-abc123';
@@ -145,5 +145,53 @@ describe('buildDispatchHeaders', () => {
     const expected = signWebhook(secret, body, fixedTs);
     expect(headers['X-Triologue-Timestamp']).toBe(expected.timestamp);
     expect(headers['X-Triologue-Signature']).toBe(expected.signature);
+  });
+});
+
+describe('dispatchWebhook', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('signs the request itself (the caller cannot forget) when the agent has a secret', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const body = '{"messageId":"m1","content":"hi"}';
+
+    const ok = await dispatchWebhook({
+      url: 'https://example.test/hook',
+      body,
+      agent: { mentionKey: '@bot', webhookSecret: 'abc123' },
+      agentKey: '@bot',
+    });
+
+    expect(ok).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(fetchMock.mock.calls[0][0]).toBe('https://example.test/hook');
+    expect(init.body).toBe(body);
+    const headers = init.headers as Record<string, string>;
+    expect(headers['X-Triologue-Agent']).toBe('@bot');
+    expect(headers['X-Triologue-Secret']).toBe('abc123');
+    expect(headers['X-Triologue-Timestamp']).toMatch(/^\d+$/);
+    // The signature is computed over the exact body that was sent.
+    const expected = signWebhook('abc123', body, Number(headers['X-Triologue-Timestamp']));
+    expect(headers['X-Triologue-Signature']).toBe(expected.signature);
+  });
+
+  it('omits the signature headers when the agent has no secret', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await dispatchWebhook({
+      url: 'https://example.test/hook',
+      body: '{}',
+      agent: { mentionKey: '@bot', webhookSecret: null },
+      agentKey: '@bot',
+    });
+
+    const headers = fetchMock.mock.calls[0][1].headers as Record<string, string>;
+    expect(Object.keys(headers).sort()).toEqual(['Content-Type', 'X-Triologue-Agent']);
   });
 });
