@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-06-16
+
+Patch release: HMAC signing centralized into `dispatchWebhook` and two esbuild advisories closed via the tsx dev-dependency bump.
+
+### Security
+
+- **tsx bumped to `^4.22.4` to clear two esbuild advisories** (GHSA-gv7w-rqvm-qjhr, GHSA-g7r4-m6w7-qqqr, PR #31). esbuild is a transitive dev-only dependency via tsx; the advisories cover bundler-level issues that do not affect the production runtime, and are resolved by the tsx range bump.
+
+### Changed
+
+- **HMAC signing centralized inside `dispatchWebhook`** (PR #30). Each call site previously assembled the signature independently before calling dispatch; the logic is now a single internal function, eliminating duplication and reducing the surface for future call sites to miss the signing step.
+
 ## [0.2.1] - 2026-06-09
 
 Security release closing the 2026-05-30 audit findings and a CVE sweep. The headline is a HIGH cross-tenant disclosure in the SSE reconnect replay path. No feature changes; the `v0.2.1` tag is the gateway app version and triggers the GitHub Release workflow.
