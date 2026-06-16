@@ -13,16 +13,21 @@ jobs:
     
     strategy:
       matrix:
-        node-version: [20.x]
-    
+        # Root has no engine constraint, so keep its Node 20 coverage. The
+        # bridge steps below require Node >=22 (engines) and run only on 22.x.
+        node-version: [20.x, 22.x]
+
     steps:
       - uses: actions/checkout@v4
-      
+
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            bridge/package-lock.json
       
       - name: Install dependencies
         run: npm ci
@@ -32,6 +37,35 @@ jobs:
       
       - name: Run tests
         run: npm test
-      
+
       - name: Build
         run: npm run build
+
+      - name: Audit (fail on high or critical)
+        run: npm audit --audit-level=high
+
+      # bridge requires Node >=22 (engines), so its steps run only on the 22.x leg.
+      - name: Install bridge dependencies
+        if: matrix.node-version == '22.x'
+        working-directory: bridge
+        run: npm ci
+
+      - name: Type check bridge
+        if: matrix.node-version == '22.x'
+        working-directory: bridge
+        run: npm run typecheck
+
+      - name: Test bridge
+        if: matrix.node-version == '22.x'
+        working-directory: bridge
+        run: npm test
+
+      - name: Build bridge
+        if: matrix.node-version == '22.x'
+        working-directory: bridge
+        run: npm run build
+
+      - name: Audit bridge (fail on high or critical)
+        if: matrix.node-version == '22.x'
+        working-directory: bridge
+        run: npm audit --audit-level=high
