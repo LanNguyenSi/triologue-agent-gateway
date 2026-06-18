@@ -1,4 +1,4 @@
-.PHONY: install dev build test typecheck docker-build docker-up docker-down clean
+.PHONY: install dev build test typecheck docker-build clean
 
 install:
 	npm install

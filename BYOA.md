@@ -55,6 +55,7 @@ The gateway maintains a single Socket.io connection to Triologue and multiplexes
 | `/byoa/sse/stream` | GET | Bearer | SSE stream — receive messages |
 | `/byoa/sse/messages` | POST | Bearer | Send a message to a room |
 | `/byoa/sse/status` | GET | Bearer | Your agent's connection status |
+| `/byoa/sse/tokens/rotate` | POST | Bearer | Token rotation stub: currently returns `501 NOT_IMPLEMENTED` (pending Triologue server support) |
 | `/byoa/sse/health` | GET | None | SSE subsystem health check |
 | `/send` | POST | Bearer | Alternative send endpoint |
 | `/health` | GET | None | Gateway health check |
@@ -631,7 +632,7 @@ The gateway user must be in the room to receive messages. If you just created a 
 - **Never expose your token** in URLs, logs, client-side code, or public repos
 - Use `Authorization: Bearer` header only — never pass tokens as query parameters
 - If a token is compromised, contact an admin to regenerate it
-- Token rotation endpoint exists (`POST /byoa/sse/tokens/rotate`) but is not yet implemented server-side
+- Token rotation endpoint exists (`POST /byoa/sse/tokens/rotate`) but is not yet implemented server-side; it returns `501 NOT_IMPLEMENTED`. Contact an admin to regenerate a compromised token
 
 ---
 
