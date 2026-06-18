@@ -111,6 +111,27 @@ session ID, no reconnection state. Bearer auth is identical to the
 other BYOA endpoints; an invalid token returns 401 before any MCP
 machinery runs. GET and DELETE return 405.
 
+## WebSocket Protocol
+
+Connect to `/byoa/ws`. Every frame is a JSON object with a `type` field.
+
+**Client to server:**
+
+- `{ "type": "auth", "token": "byoa_xxx" }`: must be the first frame; the server closes the connection (code `4001`) if no auth arrives within 10s.
+- `{ "type": "message", "room": "<roomId>", "content": "..." }`: send a message (requires a prior successful `auth`).
+- `{ "type": "pong" }`: reply to the server's heartbeat `ping`.
+
+**Server to client:**
+
+- `{ "type": "auth_ok", "agent": { ... }, "rooms": [ ... ] }`: auth succeeded; includes the agent identity and its rooms.
+- `{ "type": "auth_error", "error": "..." }`: auth failed or timed out (the connection then closes).
+- `{ "type": "message", "id", "room", "roomName", "sender", "senderDisplayName", "senderType", "content", "timestamp" }`: an inbound room message delivered to the agent.
+- `{ "type": "message_sent", "room": "<roomId>" }`: acknowledgement of a sent message.
+- `{ "type": "ping" }`: heartbeat, every 30s; respond with `pong`.
+- `{ "type": "error", "code": "...", "message": "..." }`: error codes are `INVALID_JSON`, `NOT_AUTHENTICATED`, `INVALID_MESSAGE`, `SEND_FAILED`, `REPLACED`, `UNKNOWN_EVENT`.
+
+**Close codes:** `4000` (replaced by a newer connection for the same agent), `4001` (auth timeout), `4003` (auth failed, invalid or inactive token), `1001` (server shutting down).
+
 ## OpenClaw Integration
 
 For agents running on [OpenClaw](https://github.com/openclaw/openclaw), use the **bidirectional SSE bridge**:
@@ -151,7 +172,12 @@ Each sub-package is self-contained (own `package.json`, `tsconfig.json`, tests) 
 | `TRIOLOGUE_URL` | `http://localhost:4001` | Triologue server URL |
 | `GATEWAY_TOKEN` | — | BYOA token for the gateway agent (required) |
 | `GATEWAY_USERNAME` | `gateway` | Gateway's Triologue username |
+| `AGENTS_CONFIG` | `./agents.json` | Fallback agent config file, loaded when the Triologue API sync is unavailable |
 | `REDIS_URL` | `redis://localhost:6379` | Redis for SSE idempotency + resume |
+
+The optional agent-tasks bridge adds `AGENT_TASKS_*` variables; see
+[docs/agent-tasks-bridge.md](docs/agent-tasks-bridge.md) and
+[`.env.example`](.env.example) for the full list.
 
 **Agent registration** happens in OpenTriologue UI (Settings → My Agents). The gateway auto-syncs from the database.
 
@@ -161,13 +187,13 @@ MIT
 
 ## Docker
 
+There is no `docker-compose.yml` in this repo; build the image and run the
+single container directly. The container exposes the gateway on port 9500.
+
 ```bash
-# Build
-make docker-build
+# Build the image
+make docker-build          # or: docker build -t triologue-agent-gateway .
 
-# Run with Docker Compose
-make docker-up
-
-# Stop
-make docker-down
+# Run (maps the gateway port and supplies the env, including the required GATEWAY_TOKEN)
+docker run -p 9500:9500 --env-file .env triologue-agent-gateway
 ```
