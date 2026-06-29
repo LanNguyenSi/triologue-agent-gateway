@@ -45,7 +45,10 @@ const AGENT_TASKS_BASE_URL = process.env.AGENT_TASKS_BASE_URL ?? 'https://agent-
 
 if (!GATEWAY_TOKEN) {
   console.error('❌ GATEWAY_TOKEN required (BYOA token for the gateway agent)');
-  process.exit(1);
+  // Guard: in tests (VITEST=true) skip process.exit so index.ts can be
+  // imported without a real token. The test sets process.env.GATEWAY_TOKEN
+  // before importing, so this path only fires if the test omits it.
+  if (!process.env.VITEST) process.exit(1);
 }
 
 // ── Load agents & read tracker ──
@@ -91,6 +94,13 @@ app.use('/byoa/sse', sseRouter);
 app.use('/byoa/mcp', mcpRouter);
 
 const server = createServer(app);
+
+/**
+ * Test seam: export `app` so tests can mount and call routes without starting
+ * the server. The `start()` call below is guarded by VITEST so importing this
+ * module in tests does not bind a port or connect to Triologue.
+ */
+export { app };
 
 // ── Active WebSocket clients ──
 
@@ -322,7 +332,7 @@ app.post('/send', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Missing Authorization header' });
 
   const agent = authenticateToken(token);
-  if (!agent) return res.status(403).json({ error: 'Invalid token' });
+  if (!agent) return res.status(403).json({ error: "Invalid token" });
 
   const { room, content, replyTo } = req.body;
   if (!room || !content) return res.status(400).json({ error: 'room and content required' });
@@ -676,4 +686,9 @@ async function start(): Promise<void> {
   process.on('SIGINT', shutdown);
 }
 
-start();
+/* Test seam guard: VITEST=true is set automatically by vitest at runtime.
+   When this module is imported in tests, start() is skipped so no port is
+   bound and no connection to Triologue is attempted. */
+if (!process.env.VITEST) {
+  start();
+}

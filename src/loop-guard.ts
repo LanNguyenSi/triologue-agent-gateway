@@ -40,3 +40,11 @@ export function shouldDeliver(
 
   return true;
 }
+
+/**
+ * @internal Test-only state access — lets tests pre-populate internal Maps to
+ * reach branches (e.g. the 5/min cap) that are impossible to trigger through
+ * the public API due to the 30-second cooldown constraint.
+ * Do NOT use in production code.
+ */
+export const _testState = { lastExchange, exchangeCount };
