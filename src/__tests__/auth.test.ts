@@ -30,7 +30,6 @@ function makeRawAgent(overrides: Record<string, unknown> = {}) {
 }
 
 import {
-  buildTokenIndex,
   authenticateToken,
   getWebhookAgents,
   getAgentByUsername,
@@ -169,6 +168,7 @@ describe('syncFromApi — malformed / invalid API responses', () => {
       ok: false,
       status: 503,
       statusText: 'Service Unavailable',
+      json: async () => ({ agents: [makeRawAgent()] }),
     } as unknown as Response));
 
     const ok = await syncFromApi();

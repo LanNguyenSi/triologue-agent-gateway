@@ -332,7 +332,7 @@ app.post('/send', async (req, res) => {
   if (!token) return res.status(401).json({ error: 'Missing Authorization header' });
 
   const agent = authenticateToken(token);
-  if (!agent) return res.status(403).json({ error: "Invalid token" });
+  if (!agent) return res.status(403).json({ error: 'Invalid token' });
 
   const { room, content, replyTo } = req.body;
   if (!room || !content) return res.status(400).json({ error: 'room and content required' });
