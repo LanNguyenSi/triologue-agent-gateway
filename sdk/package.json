@@ -11,6 +11,7 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "lint": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
@@ -24,6 +25,7 @@
   "author": "Ice <ice@openclaw.ai>",
   "license": "MIT",
   "devDependencies": {
+    "@vitest/coverage-v8": "4.1.8",
     "typescript": "^5.9.0",
     "vitest": "^4.1.4"
   },
