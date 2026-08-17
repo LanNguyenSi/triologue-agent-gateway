@@ -12,7 +12,10 @@ export default defineConfig({
       exclude: [
         // Test files themselves
         'src/__tests__/**',
-        // CLI — separate tool, not in scope for this coverage gate
+        // CLI: tested via spawned tsx child processes (cli.test.ts), which
+        // the in-worker v8 provider cannot instrument, so including it would
+        // report ~0% and drag the global gate down. A gate would need
+        // NODE_V8_COVERAGE on the child.
         'src/cli.ts',
         // Types file has no executable statements
         'src/types.ts',
@@ -39,6 +42,9 @@ export default defineConfig({
         'src/openclaw-inject.ts': { statements: 50, branches: 22, functions: 45, lines: 52 },
         'src/triologue-bridge.ts': { statements: 70, branches: 38, functions: 68, lines: 70 },
         'src/metrics.ts': { statements: 60, branches: 42, functions: 75, lines: 62 },
+        // The 100 floor is deliberate (file is fully covered today); when the
+        // file changes, re-measure and ratchet consciously, do not lower
+        // reflexively.
         'src/read-tracker.ts': { statements: 100, branches: 100, functions: 100, lines: 100 },
       },
     },

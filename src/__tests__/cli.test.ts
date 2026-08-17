@@ -108,8 +108,6 @@ describe('cli.ts - arg parsing (no connection attempted)', () => {
   }, 15000);
 
   it('exits 1 with an error when no token is provided (arg or env)', async () => {
-    const env = { ...process.env } as Record<string, string>;
-    delete env.BYOA_TOKEN;
     const { stderr, code } = await runCli([], { BYOA_TOKEN: '' });
     expect(code).toBe(1);
     expect(stderr).toContain('Token required');

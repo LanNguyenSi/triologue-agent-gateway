@@ -5,6 +5,10 @@
  * All tests drive the function purely through its public API - no internal
  * state seam.
  *
+ * INVARIANT: module state persists across tests (no reset seam), so every
+ * test MUST use a unique agent-id pair. A reused pair would be evaluated
+ * against the previous test's cooldown state at BASE_TIME.
+ *
  * Seam note: an earlier version of this file also enforced a 5-exchange
  * per-minute cap, tested via an exported `_testState` seam that pre-populated
  * internal Maps (the cap's `>= 5` branch was unreachable through the public

@@ -88,3 +88,8 @@ jobs:
         if: matrix.node-version == '22.x'
         working-directory: bridge
         run: npm audit --audit-level=high
+
+      - name: Audit sdk (fail on high or critical)
+        if: matrix.node-version == '22.x'
+        working-directory: sdk
+        run: npm audit --audit-level=high
