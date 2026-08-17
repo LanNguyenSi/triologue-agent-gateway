@@ -55,6 +55,10 @@ jobs:
         working-directory: sdk
         run: npm run lint
 
+      - name: Type check sdk test files
+        working-directory: sdk
+        run: npm run lint:test
+
       - name: Test sdk with coverage
         working-directory: sdk
         run: npm run test:coverage
@@ -73,6 +77,11 @@ jobs:
         if: matrix.node-version == '22.x'
         working-directory: bridge
         run: npm run typecheck
+
+      - name: Type check bridge test files
+        if: matrix.node-version == '22.x'
+        working-directory: bridge
+        run: npm run typecheck:test
 
       - name: Test bridge with coverage
         if: matrix.node-version == '22.x'

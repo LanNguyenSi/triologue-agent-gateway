@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "lint": "tsc --noEmit",
+    "lint:test": "tsc --noEmit -p tsconfig.test.json",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
