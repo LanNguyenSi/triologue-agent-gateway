@@ -12,27 +12,40 @@ export default defineConfig({
       exclude: [
         // Test files themselves
         'src/__tests__/**',
-        // CLI — separate tool, not in scope for this coverage gate
+        // CLI: tested via spawned tsx child processes (cli.test.ts), which
+        // the in-worker v8 provider cannot instrument, so including it would
+        // report ~0% and drag the global gate down. A gate would need
+        // NODE_V8_COVERAGE on the child.
         'src/cli.ts',
         // Types file has no executable statements
         'src/types.ts',
       ],
       // Thresholds set ~5 points below measured baseline (vitest run --coverage
-      // with include:src/**/*.ts on 2026-06-29 produced:
-      //   stmts 32.59 / branches 31.36 / funcs 23.49 / lines 32.96
-      // NOTE: several out-of-scope files (triologue-bridge, openclaw-bridge,
-      // read-tracker) are mocked away by tests so they show 0% coverage —
-      // this intentionally pulls the numbers down. Raise thresholds as more
-      // coverage is added in follow-up work.
+      // with include:src/**/*.ts on 2026-08-17, after closing the MED/LOW
+      // gaps from task bfa8e4b6, produced:
+      //   stmts 59.53 / branches 47.57 / funcs 58.68 / lines 60.94
+      // openclaw-bridge.ts, openclaw-inject.ts, triologue-bridge.ts,
+      // metrics.ts, and read-tracker.ts are newly covered by this task and
+      // get their own per-file floors below, ratcheted from their measured
+      // values with headroom. byoa-mcp.ts and webhook-dispatch.ts remain
+      // pre-existing gaps out of scope for this pass.
       thresholds: {
-        statements: 28,
-        branches: 26,
-        functions: 18,
-        lines: 28,
+        statements: 54,
+        branches: 42,
+        functions: 53,
+        lines: 55,
         'src/auth.ts': { statements: 72, branches: 75, functions: 62, lines: 72 },
         'src/loop-guard.ts': { statements: 100, branches: 100, functions: 100, lines: 100 },
         'src/byoa-sse.ts': { statements: 46, branches: 38, functions: 38, lines: 46 },
         'src/index.ts': { statements: 14, branches: 10, functions: 0, lines: 14 },
+        'src/openclaw-bridge.ts': { statements: 90, branches: 65, functions: 90, lines: 90 },
+        'src/openclaw-inject.ts': { statements: 50, branches: 22, functions: 45, lines: 52 },
+        'src/triologue-bridge.ts': { statements: 70, branches: 38, functions: 68, lines: 70 },
+        'src/metrics.ts': { statements: 60, branches: 42, functions: 75, lines: 62 },
+        // The 100 floor is deliberate (file is fully covered today); when the
+        // file changes, re-measure and ratchet consciously, do not lower
+        // reflexively.
+        'src/read-tracker.ts': { statements: 100, branches: 100, functions: 100, lines: 100 },
       },
     },
   },

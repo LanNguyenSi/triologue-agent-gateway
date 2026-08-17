@@ -1,15 +1,23 @@
 /**
- * Loop Guard — prevents agent-agent infinite loops.
+ * Loop Guard - prevents agent-agent infinite loops.
  *
  * Rules:
  *   standard trust → only receives human messages
- *   elevated trust → receives human + agent messages, with cooldowns:
- *     - 30s cooldown between same agent pair
- *     - Max 5 exchanges per minute per pair
+ *   elevated trust → receives human + agent messages, with a 30s cooldown
+ *     between the same agent pair.
+ *
+ * Seam note (2026-08-17): this file previously also enforced a 5-exchange
+ * per-minute cap per pair. With a 30s cooldown, at most 3 deliveries fit in
+ * any 60s window (t=0, 30, 60 - the 61st call resets the window), so the
+ * cap's `>= 5` branch was unreachable through the public API. It was dead
+ * code kept alive only by a `_testState` seam that let tests pre-populate
+ * the internal Maps to force the branch. Removed rather than redesigned:
+ * the task's allowed production changes are limited to this dead-code
+ * removal (and the index.ts entrypoint-guard refactor), not a behavioral
+ * redesign of the cooldown/cap relationship.
  */
 
 const lastExchange = new Map<string, number>();
-const exchangeCount = new Map<string, { count: number; reset: number }>();
 
 export function shouldDeliver(
   _targetTrust: 'standard' | 'elevated',
@@ -20,7 +28,7 @@ export function shouldDeliver(
   // Self-loop: never
   if (senderId === targetId) return false;
 
-  // Agent-to-agent: allowed, but with cooldowns to prevent infinite loops
+  // Agent-to-agent: allowed, but with a cooldown to prevent infinite loops
   if (senderIsAgent) {
     const pair = [senderId, targetId].sort().join('↔');
     const now = Date.now();
@@ -28,23 +36,8 @@ export function shouldDeliver(
     // 30s cooldown
     if (now - (lastExchange.get(pair) ?? 0) < 30_000) return false;
 
-    // Max 5/min
-    let ex = exchangeCount.get(pair);
-    if (!ex || now > ex.reset) ex = { count: 0, reset: now + 60_000 };
-    if (ex.count >= 5) return false;
-
-    ex.count++;
-    exchangeCount.set(pair, ex);
     lastExchange.set(pair, now);
   }
 
   return true;
 }
-
-/**
- * @internal Test-only state access — lets tests pre-populate internal Maps to
- * reach branches (e.g. the 5/min cap) that are impossible to trigger through
- * the public API due to the 30-second cooldown constraint.
- * Do NOT use in production code.
- */
-export const _testState = { lastExchange, exchangeCount };
