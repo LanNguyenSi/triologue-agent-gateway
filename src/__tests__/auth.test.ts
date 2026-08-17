@@ -7,6 +7,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -35,6 +38,7 @@ import {
   getAgentByUsername,
   syncFromApi,
   loadAgents,
+  buildTokenIndex,
 } from '../auth.js';
 
 // ── State reset helpers ──────────────────────────────────────────────────────
@@ -319,18 +323,51 @@ describe('getAgentByUsername', () => {
 
 describe('loadAgents', () => {
   it('does not throw when the agents file is missing or unreadable', () => {
-    // AGENTS_CONFIG is not set, so it falls back to ./agents.json which
-    // does not exist in the test environment (gitignored). loadAgents catches
-    // the ENOENT and leaves agents empty — it must NOT throw.
+    // AGENTS_CONFIG is not set, so the default-argument path falls back to
+    // ./agents.json, which does not exist in the test environment
+    // (gitignored). loadAgents catches the ENOENT and leaves agents empty -
+    // it must NOT throw.
     expect(() => loadAgents()).not.toThrow();
   });
 
-  it('gracefully handles corrupt JSON in the agents file', () => {
-    // Point to an env path that does not exist. loadAgents swallows the error.
-    // This is a belt-and-suspenders guard: corrupt JSON also hits the catch block.
-    // We cannot change AGENTS_FILE at runtime (module-level constant) but the
-    // existing constant already points to a non-existent file in CI, which is
-    // equivalent to a read failure.
-    expect(() => loadAgents()).not.toThrow();
+  it('does not throw for an explicit nonexistent path (ENOENT branch)', () => {
+    expect(() => loadAgents('/nonexistent/dir/does-not-exist.json')).not.toThrow();
+  });
+
+  it('gracefully handles corrupt JSON in the agents file and empties the agent list', async () => {
+    // Seed a known, authenticatable agent first so we can observe loadAgents'
+    // catch branch actually resetting the internal `agents` array to [].
+    await seedAgents([makeRawAgent({ token: 'byoa_pre_corrupt' })]);
+    expect(authenticateToken('byoa_pre_corrupt')).not.toBeNull();
+
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-corrupt-json-'));
+    const corruptFile = path.join(tmpDir, 'agents.json');
+    fs.writeFileSync(corruptFile, '{ this is not valid json');
+
+    try {
+      // MUTATION GUARD: this real corrupt-JSON temp file drives the actual
+      // JSON.parse failure branch (not just an ENOENT read failure).
+      expect(() => loadAgents(corruptFile)).not.toThrow();
+      buildTokenIndex();
+      // MUTATION GUARD: if the catch block stopped resetting `agents = []`,
+      // the previously-seeded token would still authenticate here.
+      expect(authenticateToken('byoa_pre_corrupt')).toBeNull();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads agents from a real, valid JSON file via the injectable path', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'auth-valid-json-'));
+    const validFile = path.join(tmpDir, 'agents.json');
+    fs.writeFileSync(validFile, JSON.stringify([makeRawAgent({ token: 'byoa_from_file' })]));
+
+    try {
+      loadAgents(validFile);
+      buildTokenIndex();
+      expect(authenticateToken('byoa_from_file')).not.toBeNull();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

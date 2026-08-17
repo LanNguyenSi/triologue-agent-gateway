@@ -1,9 +1,11 @@
 /**
  * Tests for the POST /send route in src/index.ts.
  *
- * Production seam: index.ts exports `app` and guards `start()` with
- * `if (!process.env.VITEST)`. This lets tests import the Express app,
- * mount it on an ephemeral port, and call /send in isolation without
+ * Production seam: index.ts exports `app` and gates `main()` (token check +
+ * agent/read-tracker bootstrap + start()) behind a module-is-main check
+ * (`process.argv[1] === fileURLToPath(import.meta.url)`), which is false
+ * when this file is imported by a test. This lets tests import the Express
+ * app, mount it on an ephemeral port, and call /send in isolation without
  * spawning a real Triologue connection or WebSocket server.
  *
  * All heavy dependencies are mocked so no real network calls are made.
@@ -34,8 +36,11 @@ import type { AddressInfo } from 'node:net';
 import type { AgentInfo } from '../types.js';
 
 // ── Set required env var BEFORE index.ts loads ────────────────────────────────
-// index.ts has `if (!GATEWAY_TOKEN) { process.exit(1) }` at module level.
-// Setting it here, before the dynamic import below, ensures the guard passes.
+// index.ts reads GATEWAY_TOKEN into a module-level const used by the
+// TriologueBridge instance constructed at import time. The token check
+// itself now lives inside main(), which never runs under the module-is-main
+// guard during tests - but the bridge still reads this const, so it is set
+// here for a realistic value.
 process.env.GATEWAY_TOKEN = 'test-gateway-token';
 
 // ── Shared mock references via vi.hoisted ─────────────────────────────────────
@@ -47,6 +52,10 @@ const mocks = vi.hoisted(() => ({
   onMessage: vi.fn(),
   onTaskAssigned: vi.fn(),
   authenticateToken: vi.fn<(token: string) => AgentInfo | null>(),
+  // Shared (not per-instance) so the module-is-main guard test below can
+  // assert on it directly: index.ts constructs exactly one TriologueBridge
+  // at module load, and only main() -> start() calls bridge.connect().
+  connect: vi.fn().mockResolvedValue(undefined),
 }));
 
 // ── TriologueBridge mock ───────────────────────────────────────────────────────
@@ -60,7 +69,7 @@ vi.mock('../triologue-bridge', () => {
     sendAsAgent = mocks.sendAsAgent;
     onMessage = mocks.onMessage;
     onTaskAssigned = mocks.onTaskAssigned;
-    connect = vi.fn().mockResolvedValue(undefined);
+    connect = mocks.connect;
     disconnect = vi.fn();
     getAgentRooms = vi.fn().mockResolvedValue([]);
     fetchMessagesSince = vi.fn().mockResolvedValue([]);
@@ -150,9 +159,23 @@ vi.mock('../metrics', () => ({
 
 // ── Import app after all mocks are registered ─────────────────────────────────
 // Dynamic import ensures mocks are in place before index.ts module body runs.
-// index.ts is safe to import: start() is guarded by `if (!process.env.VITEST)`.
+// index.ts is safe to import: main() only runs behind the module-is-main
+// guard, which is false when this file is the import target of a test.
 
 const { app } = await import('../index.js');
+
+// ── Module-is-main entrypoint guard ─────────────────────────────────────────────
+// Mutation guard: if the `if (isMainModule)` check at the bottom of index.ts
+// were replaced with `if (true)`, main() would run on this very import -
+// calling bridge.connect() (among other side effects) even though this file
+// merely imports `{ app }` for route testing. Verified by temporarily
+// forcing the guard true locally: this assertion fails as expected, then
+// passes again once reverted.
+describe('module-is-main entrypoint guard', () => {
+  it('does not call bridge.connect() merely by importing index.ts for its app export', () => {
+    expect(mocks.connect).not.toHaveBeenCalled();
+  });
+});
 
 // ── Server lifecycle ──────────────────────────────────────────────────────────
 

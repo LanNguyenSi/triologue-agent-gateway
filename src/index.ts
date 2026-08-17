@@ -12,6 +12,7 @@
 import 'dotenv/config';
 import express from 'express';
 import { createServer } from 'http';
+import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAgentByUsername, getAllAgents, startSync, stopSync } from './auth';
 import { dispatchWebhook } from './webhook-dispatch';
@@ -42,20 +43,6 @@ const AGENT_TASKS_WEBHOOK_ALLOW_UNSIGNED = process.env.AGENT_TASKS_WEBHOOK_ALLOW
 const AGENT_TASKS_BOT_TOKEN = process.env.AGENT_TASKS_BOT_TOKEN ?? null;
 const AGENT_TASKS_INBOX_ROOM_ID = process.env.AGENT_TASKS_INBOX_ROOM_ID ?? null;
 const AGENT_TASKS_BASE_URL = process.env.AGENT_TASKS_BASE_URL ?? 'https://agent-tasks.opentriologue.ai';
-
-if (!GATEWAY_TOKEN) {
-  console.error('❌ GATEWAY_TOKEN required (BYOA token for the gateway agent)');
-  // Guard: in tests (VITEST=true) skip process.exit so index.ts can be
-  // imported without a real token. The test sets process.env.GATEWAY_TOKEN
-  // before importing, so this path only fires if the test omits it.
-  if (!process.env.VITEST) process.exit(1);
-}
-
-// ── Load agents & read tracker ──
-
-loadAgents();
-buildTokenIndex();
-loadReadTracker();
 
 // ── Express ──
 
@@ -97,8 +84,10 @@ const server = createServer(app);
 
 /**
  * Test seam: export `app` so tests can mount and call routes without starting
- * the server. The `start()` call below is guarded by VITEST so importing this
- * module in tests does not bind a port or connect to Triologue.
+ * the server. `main()` (token check + agent/read-tracker bootstrap + start())
+ * only runs behind the module-is-main guard at the bottom of this file, so
+ * importing this module (in tests or otherwise) never binds a port or
+ * connects to Triologue.
  */
 export { app };
 
@@ -686,9 +675,35 @@ async function start(): Promise<void> {
   process.on('SIGINT', shutdown);
 }
 
-/* Test seam guard: VITEST=true is set automatically by vitest at runtime.
-   When this module is imported in tests, start() is skipped so no port is
-   bound and no connection to Triologue is attempted. */
-if (!process.env.VITEST) {
-  start();
+/**
+ * Bootstrap the gateway: verify config, load agent + read-tracker state, then
+ * connect and start listening. Wrapped together (rather than guarded
+ * separately) so the only way any of this runs is via the module-is-main
+ * check below.
+ */
+async function main(): Promise<void> {
+  if (!GATEWAY_TOKEN) {
+    console.error('❌ GATEWAY_TOKEN required (BYOA token for the gateway agent)');
+    process.exit(1);
+  }
+
+  loadAgents();
+  buildTokenIndex();
+  loadReadTracker();
+
+  await start();
+}
+
+/**
+ * Module-is-main entrypoint guard: true only when this file is the process
+ * entrypoint (`tsx src/index.ts` / `node dist/index.js`), false when it is
+ * imported (e.g. tests importing `{ app }`). Using an import.meta.url /
+ * process.argv[1] comparison instead of a test-only env var keeps importing
+ * this module side-effect-free: no console output, no process.exit, no
+ * agent/read-tracker loads, no listen call.
+ */
+const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
+
+if (isMainModule) {
+  main();
 }

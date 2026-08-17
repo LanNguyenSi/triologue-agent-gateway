@@ -2,23 +2,22 @@
  * Tests for src/loop-guard.ts
  *
  * shouldDeliver is pure-deterministic; vi.useFakeTimers() controls Date.now().
+ * All tests drive the function purely through its public API - no internal
+ * state seam.
  *
- * Architecture note on the 5/min cap:
- *   The 30-second cooldown and the 60-second window are mutually exclusive for
- *   the same pair: with 30s gaps, at most 3 deliveries fit within any 60s
- *   window before it resets (at t=0, 30s, 60s — then the 61s call resets the
- *   window).  The 5/min cap is therefore unreachable through the public API
- *   for a single pair.  The _testState seam lets us pre-populate the internal
- *   Maps to exercise the `ex.count >= 5` branch directly.
+ * Seam note: an earlier version of this file also enforced a 5-exchange
+ * per-minute cap, tested via an exported `_testState` seam that pre-populated
+ * internal Maps (the cap's `>= 5` branch was unreachable through the public
+ * API given the 30s cooldown - see loop-guard.ts). The cap was removed as
+ * dead code; this file now only covers the cooldown behavior that remains.
  *
  * Mutation guards (each marked at the relevant test):
  *   M1: invert self-loop check (`senderId !== targetId`) → self-loop tests fail
- *   M2: change cap from `>= 5` to `>= 6` → 6th-message cap test fails
  *   M3: change cooldown threshold from 30_000 → 0 → cooldown test fails
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { shouldDeliver, _testState } from '../loop-guard.js';
+import { shouldDeliver } from '../loop-guard.js';
 
 // ── Timer setup ──────────────────────────────────────────────────────────────
 
@@ -28,9 +27,6 @@ const BASE_TIME = new Date('2025-01-01T00:00:00.000Z').getTime();
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(BASE_TIME);
-  // Clear module-level state between tests (maps are exported via _testState)
-  _testState.lastExchange.clear();
-  _testState.exchangeCount.clear();
 });
 
 afterEach(() => {
@@ -95,43 +91,17 @@ describe('30s cooldown between same agent pair', () => {
     // B→A uses same pair key, so also blocked
     expect(shouldDeliver('elevated', true, 'bot-ord-B', 'bot-ord-A')).toBe(false);
   });
-});
 
-// ── 5-per-minute cap (M2) ─────────────────────────────────────────────────────
-
-describe('5-per-minute cap', () => {
-  it('5th delivery is allowed (count just below cap)', () => {
-    const pair = ['cap5-A', 'cap5-B'].sort().join('↔');
-    // Pre-set state: 4 exchanges in the current window, cooldown cleared
-    _testState.exchangeCount.set(pair, { count: 4, reset: BASE_TIME + 60_000 });
-    _testState.lastExchange.set(pair, BASE_TIME - 30_000); // 30s ago → cooldown satisfied
-
-    expect(shouldDeliver('elevated', true, 'cap5-A', 'cap5-B')).toBe(true);
-  });
-
-  it('6th delivery is blocked once count reaches 5', () => {
-    const pair = ['cap6-A', 'cap6-B'].sort().join('↔');
-    // Pre-set state: 5 exchanges already in window, cooldown cleared
-    _testState.exchangeCount.set(pair, { count: 5, reset: BASE_TIME + 60_000 });
-    _testState.lastExchange.set(pair, BASE_TIME - 30_000);
-
-    // MUTATION GUARD M2: change `>= 5` to `>= 6` → returns true; test fails
-    expect(shouldDeliver('elevated', true, 'cap6-A', 'cap6-B')).toBe(false);
-  });
-
-  it('window resets and allows delivery after 60s', () => {
-    const pair = ['cap-reset-A', 'cap-reset-B'].sort().join('↔');
-    // Start with an exhausted window that expires in 1s
-    _testState.exchangeCount.set(pair, { count: 5, reset: BASE_TIME + 1_000 });
-    _testState.lastExchange.set(pair, BASE_TIME - 30_000);
-
-    // Confirm blocked while window is active
-    expect(shouldDeliver('elevated', true, 'cap-reset-A', 'cap-reset-B')).toBe(false);
-
-    // Advance past the window reset time + cooldown
-    vi.advanceTimersByTime(31_000);
-    // New window starts → delivery allowed
-    expect(shouldDeliver('elevated', true, 'cap-reset-A', 'cap-reset-B')).toBe(true);
+  it('repeated deliveries at exactly the cooldown boundary stay allowed', () => {
+    // Drives the same pair across several 30s-spaced calls - the scenario
+    // that used to make the (now-removed) 5/min cap unreachable.
+    const sender = 'bot-cadence-A';
+    const target = 'bot-cadence-B';
+    expect(shouldDeliver('elevated', true, sender, target)).toBe(true);
+    for (let i = 0; i < 5; i++) {
+      vi.advanceTimersByTime(30_000);
+      expect(shouldDeliver('elevated', true, sender, target)).toBe(true);
+    }
   });
 });
 
@@ -144,12 +114,11 @@ describe('distinct pairs are independent', () => {
     expect(shouldDeliver('elevated', true, 'bot-indep-A', 'bot-indep-C')).toBe(true);
   });
 
-  it('exchange count for pair A does not bleed into pair B', () => {
-    const pairA = ['bleed-A1', 'bleed-A2'].sort().join('↔');
-    _testState.exchangeCount.set(pairA, { count: 5, reset: BASE_TIME + 60_000 });
-    _testState.lastExchange.set(pairA, BASE_TIME - 30_000);
+  it('cooldown state for pair A does not bleed into pair B', () => {
+    shouldDeliver('elevated', true, 'bleed-A1', 'bleed-A2');
+    vi.advanceTimersByTime(5_000); // within pair A's cooldown
 
-    // Pair A is blocked
+    // Pair A is still blocked
     expect(shouldDeliver('elevated', true, 'bleed-A1', 'bleed-A2')).toBe(false);
     // Fresh pair B is not blocked
     expect(shouldDeliver('elevated', true, 'bleed-B1', 'bleed-B2')).toBe(true);

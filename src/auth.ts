@@ -40,12 +40,19 @@ let syncInterval: ReturnType<typeof setInterval> | null = null;
 
 // ── Load from file (fallback) ──
 
-export function loadAgents(): void {
+/**
+ * @param filePath Defaults to the module-level AGENTS_FILE constant. Exposed
+ *   as a parameter (rather than hard-coded) so tests can point this at a
+ *   real temp file, including a corrupt one, and exercise the JSON.parse
+ *   failure branch directly instead of relying on AGENTS_FILE happening to
+ *   be unreadable in CI.
+ */
+export function loadAgents(filePath: string = AGENTS_FILE): void {
   try {
-    agents = JSON.parse(fs.readFileSync(AGENTS_FILE, 'utf-8'));
-    console.log(`📋 Loaded ${agents.length} agents from ${AGENTS_FILE}`);
+    agents = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    console.log(`📋 Loaded ${agents.length} agents from ${filePath}`);
   } catch (err: any) {
-    console.warn(`⚠️ Could not load ${AGENTS_FILE}: ${err.message} — will try API sync`);
+    console.warn(`⚠️ Could not load ${filePath}: ${err.message} - will try API sync`);
     agents = [];
   }
 }
