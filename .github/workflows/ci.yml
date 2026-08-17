@@ -28,13 +28,14 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             bridge/package-lock.json
-      
+            sdk/package-lock.json
+
       - name: Install dependencies
         run: npm ci
-      
+
       - name: Type check
         run: npx tsc --noEmit
-      
+
       - name: Run tests with coverage
         run: npm run test:coverage
 
@@ -43,6 +44,24 @@ jobs:
 
       - name: Audit (fail on high or critical)
         run: npm audit --audit-level=high
+
+      # sdk has no engine floor above the matrix's own Node versions, so its
+      # steps run on both legs (same as root).
+      - name: Install sdk dependencies
+        working-directory: sdk
+        run: npm ci
+
+      - name: Type check sdk
+        working-directory: sdk
+        run: npm run lint
+
+      - name: Test sdk with coverage
+        working-directory: sdk
+        run: npm run test:coverage
+
+      - name: Build sdk
+        working-directory: sdk
+        run: npm run build
 
       # bridge requires Node >=22 (engines), so its steps run only on the 22.x leg.
       - name: Install bridge dependencies
@@ -55,10 +74,10 @@ jobs:
         working-directory: bridge
         run: npm run typecheck
 
-      - name: Test bridge
+      - name: Test bridge with coverage
         if: matrix.node-version == '22.x'
         working-directory: bridge
-        run: npm test
+        run: npm run test:coverage
 
       - name: Build bridge
         if: matrix.node-version == '22.x'
