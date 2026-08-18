@@ -16,11 +16,15 @@
     // Fix: make the ESM story consistent instead - declare the package ESM
     // (package.json "type": "module") and switch to Node's own ESM
     // resolution algorithm (NodeNext), which requires (and this repo's
-    // relative imports now carry) explicit ".js" extensions. This is
-    // deploy-neutral: `tsx src/index.ts` (the systemd/prod path) and vitest
-    // (Vite-based transform) both resolve extensionless imports themselves
-    // and ignore this compiler option, so only `npm run build` /
-    // `node dist/*.js` output is affected.
+    // relative imports now carry) explicit ".js" extensions. Two halves
+    // with DIFFERENT blast radius: (a) module/moduleResolution NodeNext is
+    // compiler-only - tsx (systemd/prod path) and vitest ignore it;
+    // (b) "type": "module" in package.json is NOT compiler-only: it flips
+    // tsx's interpretation of .ts files from CJS to ESM, which is exactly
+    // why the __dirname/require.main sites in metrics.ts, read-tracker.ts
+    // and triologue-bridge.ts were rewritten to import.meta.url in the
+    // same change. The tsx prod path was verified by RUNNING it (both
+    // token states, byte-identical to master), not assumed neutral.
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "esModuleInterop": true,

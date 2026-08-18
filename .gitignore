@@ -7,3 +7,4 @@ agents.json
 gateway.log
 metrics.jsonl
 .read-tracker.json
+.dist-boot-test

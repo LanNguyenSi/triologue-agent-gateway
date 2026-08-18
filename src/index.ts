@@ -698,9 +698,10 @@ async function main(): Promise<void> {
  * Module-is-main entrypoint guard: true only when this file is the process
  * entrypoint (`tsx src/index.ts` / `node dist/index.js`), false when it is
  * imported (e.g. tests importing `{ app }`). Using an import.meta.url /
- * process.argv[1] comparison instead of a test-only env var keeps importing
- * this module side-effect-free: no console output, no process.exit, no
- * agent/read-tracker loads, no listen call.
+ * process.argv[1] comparison instead of a test-only env var means importing
+ * this module never calls process.exit, loads agents/read-tracker, or
+ * starts listening. (Importing is NOT fully side-effect-free: module load
+ * logs a bridge-status line and byoa-sse opens its redis connections.)
  *
  * Caution - extensionless invocation defeats this guard silently:
  * `fileURLToPath(import.meta.url)` always resolves to the full path
@@ -708,7 +709,9 @@ async function main(): Promise<void> {
  * is whatever string was passed on the command line. `node dist/index`
  * (dropping `.js`) leaves argv[1] as `.../dist/index`, which never equals
  * the extensioned path, so `isMainModule` is false and `main()` never
- * runs - the process exits 0 having done nothing, with no error printed.
+ * runs. Measured consequence: the process does NOT exit - module-load side
+ * effects (byoa-sse redis clients) keep the event loop alive, so it hangs
+ * emitting ioredis ECONNREFUSED errors while the server never listens.
  * Always invoke with the explicit `.js` extension (as the Docker CMD and
  * npm script here both do) or use `tsx src/index.ts`.
  */

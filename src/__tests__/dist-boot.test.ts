@@ -12,11 +12,19 @@
  * `npm run build` output actually shipped in the Docker image: no compiled
  * test files should land in dist/.
  *
- * beforeAll always runs a fresh `npm run build` (rather than trusting a
- * stale dist/ from a previous run) so this test fails whenever the current
- * source no longer produces a bootable dist/index.js - see the mutation
- * probe in the task report for a verified case (temporarily removing
- * "type": "module" reproduces ERR_MODULE_NOT_FOUND here).
+ * beforeAll always runs a fresh build (rather than trusting a stale dist/
+ * from a previous run) so this test fails whenever the current source no
+ * longer produces a bootable entrypoint. Measured failure mechanism of the
+ * mutation probe: temporarily removing "type": "module" fails the BUILD
+ * (5x TS1470, import.meta not allowed in CommonJS output) inside beforeAll
+ * - node is never spawned. A reverted extensionless import is likewise
+ * caught by tsc (TS2835) under NodeNext. The ERR_MODULE_NOT_FOUND
+ * assertion below is belt-and-braces for mechanisms tsc cannot see, not
+ * the primary guard.
+ *
+ * The build goes to a temp outDir so this test never touches the repo's
+ * dist/ (a dev following CONTRIBUTING's build-then-test flow keeps their
+ * fresh dist/, and no parallel test shares mutable state).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync, spawn } from 'node:child_process';
@@ -25,7 +33,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
-const DIST_DIR = path.join(ROOT, 'dist');
+const DIST_DIR = path.join(ROOT, '.dist-boot-test');
 const DIST_INDEX = path.join(DIST_DIR, 'index.js');
 
 interface RunResult {
@@ -52,7 +60,10 @@ function runNode(args: string[], env: Record<string, string>): Promise<RunResult
 describe('dist/ entrypoint (matches Dockerfile CMD ["node", "dist/index.js"])', () => {
   beforeAll(() => {
     rmSync(DIST_DIR, { recursive: true, force: true });
-    execFileSync('npm', ['run', 'build'], { cwd: ROOT, stdio: 'pipe' });
+    execFileSync('npx', ['tsc', '-p', 'tsconfig.build.json', '--outDir', DIST_DIR], {
+      cwd: ROOT,
+      stdio: 'pipe',
+    });
   }, 60_000);
 
   afterAll(() => {
@@ -79,4 +90,24 @@ describe('dist/ entrypoint (matches Dockerfile CMD ["node", "dist/index.js"])', 
     // already proves that didn't happen, but assert it explicitly too.
     expect(stderr).not.toContain('ERR_MODULE_NOT_FOUND');
   }, 15_000);
+
+  it('tsx src/index.ts (the actual systemd/prod path) reaches main() and exits 1 without GATEWAY_TOKEN', async () => {
+    // Guards prod against a future CJS-ism (e.g. a reintroduced __dirname)
+    // regressing under type:module - the highest-risk surface of the ESM
+    // switch, and the path dist-boot alone does not cover.
+    const child = spawn('npx', ['tsx', 'src/index.ts'], {
+      cwd: ROOT,
+      env: { ...process.env, GATEWAY_TOKEN: '' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const result = await new Promise<RunResult>((resolve) => {
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d) => (stdout += d.toString()));
+      child.stderr.on('data', (d) => (stderr += d.toString()));
+      child.on('close', (code) => resolve({ stdout, stderr, code }));
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('GATEWAY_TOKEN required');
+  }, 30_000);
 });

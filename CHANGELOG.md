@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The package is now genuinely ESM (`type: module`, NodeNext resolution,
+  explicit `.js` extensions), so the Docker image's `node dist/index.js`
+  boots instead of dying with `ERR_MODULE_NOT_FOUND`; `dist/` no longer
+  ships compiled test files (builds go through `tsconfig.build.json`).
+  The systemd/tsx deploy path is unchanged and verified byte-identical.
+
 ## [0.2.2] - 2026-06-16
 
 Patch release: HMAC signing centralized into `dispatchWebhook` and two esbuild advisories closed via the tsx dev-dependency bump.
