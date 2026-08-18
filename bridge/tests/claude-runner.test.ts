@@ -15,6 +15,8 @@
  *   M6: runClaude stops cleaning up the temp dir (finally block)
  *   M7: mcp.json is no longer written with mode 0o600
  *   M8: runClaude stops escalating to SIGKILL after the 5s killTimer
+ *   M9: runClaude stops suppressing SIGKILL once the child has actually
+ *       exited (the `exited === true` branch of the `if (!exited)` guard)
  */
 
 import { EventEmitter } from 'node:events';
@@ -323,27 +325,19 @@ describe('runClaude - failure paths', () => {
     expect(result.timedOut).toBe(true);
   });
 
-  it('escalates to SIGKILL 5s after SIGTERM when the child does not report killed (M8)', async () => {
+  it('escalates to SIGKILL 5s after SIGTERM when the child ignores SIGTERM and never exits (M8)', async () => {
     vi.useFakeTimers();
     try {
       const mockChild = new MockChildProcess();
-      // The shared MockChildProcess.kill() sets `killed = true` on every
-      // call, which matches real Node (ChildProcess#killed flips true as
-      // soon as a signal is successfully delivered, regardless of whether
-      // the child actually exits - verified against a real child process
-      // that installs a SIGTERM handler and stays alive: `.killed` was
-      // still `true` right after the first kill() call). That means the
-      // 5s killTimer's `if (!child.killed) child.kill('SIGKILL')` guard
-      // reads `killed` as already true by the time it runs, so it never
-      // fires in the "process ignored SIGTERM" scenario the comment above
-      // it describes - only in a narrower race where the SIGTERM kill()
-      // call itself did not report success. This test reproduces that
-      // narrower case directly: kill() is overridden to never flip
-      // `killed`, so the guard's condition is observable and the SIGKILL
-      // branch (source ~line 196) executes. Flagged as an open question in
-      // the task report rather than "fixed" here - the source's own
-      // signal-handling logic is out of scope for this pass.
-      mockChild.kill = vi.fn((_signal?: string) => true);
+      // Uses the shared MockChildProcess.kill() unmodified, which sets
+      // `killed = true` on every call — matching real Node (verified
+      // against a real child process that installs a SIGTERM handler and
+      // stays alive: `.killed` was already `true` right after the first
+      // kill() call returned). The child below never emits 'exit' or
+      // 'close', simulating exactly that scenario: SIGTERM delivered
+      // (killed flips true) but the process keeps running. The fixed
+      // guard tracks real termination via the 'exit' event instead of
+      // `child.killed`, so it must still escalate here.
       spawnMock.mockReturnValue(mockChild);
       const cfg = makeCfg({ claudeTimeoutMs: 10 });
 
@@ -355,14 +349,99 @@ describe('runClaude - failure paths', () => {
       expect(spawnMock).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(10);
       expect(mockChild.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
+      expect(mockChild.killed).toBe(true);
 
-      // MUTATION GUARD M8: remove the killTimer's
-      // `if (!child.killed) child.kill('SIGKILL')` call -> this second
-      // kill() never happens and the assertions below fail.
+      // MUTATION GUARD M8: revert the killTimer's guard to
+      // `if (!child.killed) child.kill('SIGKILL')` -> `killed` is already
+      // true at this point (asserted above), so the second kill() never
+      // happens and the assertions below fail.
       await vi.advanceTimersByTimeAsync(5000);
       expect(mockChild.kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
       expect(mockChild.kill).toHaveBeenCalledTimes(2);
 
+      // Let the run settle so the test doesn't leak a pending Promise.
+      mockChild.emit('exit', null);
+      mockChild.emit('close', null);
+      const result = await resultPromise;
+      expect(result.timedOut).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels the killTimer on a clean exit within the 5s escalation window (M8 clearTimeout)', async () => {
+    vi.useFakeTimers();
+    try {
+      const mockChild = new MockChildProcess();
+      spawnMock.mockReturnValue(mockChild);
+      const cfg = makeCfg({ claudeTimeoutMs: 10 });
+
+      const resultPromise = runClaude(cfg, { message: makeMessage(), agent });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(mockChild.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
+
+      // The child terminates promptly, well inside the 5s escalation
+      // window.
+      mockChild.emit('exit', null);
+      mockChild.emit('close', null);
+      await resultPromise;
+
+      // MUTATION GUARD (F1 fix): the previous version of this test only
+      // asserted that SIGKILL never fired, but that held even with
+      // `if (killTimer) clearTimeout(killTimer);` deleted, because the
+      // 'exit' listener above already sets `exited = true` and the
+      // killTimer callback's `if (!exited)` guard suppresses the kill
+      // independently of whether the timer itself was cancelled.
+      // Asserting on the fake-timer queue directly, right after the
+      // promise settles, pins that the killTimer handle was actually
+      // cleared: if the clearTimeout call is removed, the killTimer
+      // stays scheduled here and this fails even though no SIGKILL is
+      // ever observed.
+      expect(vi.getTimerCount()).toBe(0);
+
+      // Advance well past the 5s escalation delay for good measure; no
+      // SIGKILL should follow.
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(mockChild.kill).toHaveBeenCalledTimes(1);
+      expect(mockChild.kill).not.toHaveBeenCalledWith('SIGKILL');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('suppresses SIGKILL once the child has exited even before close fires (M9)', async () => {
+    vi.useFakeTimers();
+    try {
+      const mockChild = new MockChildProcess();
+      spawnMock.mockReturnValue(mockChild);
+      const cfg = makeCfg({ claudeTimeoutMs: 10 });
+
+      const resultPromise = runClaude(cfg, { message: makeMessage(), agent });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(mockChild.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
+
+      // The child has actually terminated - Node emits 'exit' as soon
+      // as the process is gone - but 'close' has not fired yet (stdio
+      // streams can still take a tick to drain). This isolates the
+      // `exited === true` branch of the killTimer's `if (!exited)`
+      // guard from the 'close'-driven cleanup path exercised by the
+      // test above.
+      mockChild.emit('exit', null);
+
+      // MUTATION GUARD M9: make the `child.once('exit', ...)` listener
+      // body a no-op -> `exited` never flips to true, the killTimer's
+      // `if (!exited)` guard stays open, and SIGKILL fires here too,
+      // failing the toHaveBeenCalledTimes(1) assertion below.
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(mockChild.kill).toHaveBeenCalledTimes(1);
+      expect(mockChild.kill).not.toHaveBeenCalledWith('SIGKILL');
+
+      // Let 'close' fire so the run settles cleanly and the test
+      // doesn't leak a pending Promise.
       mockChild.emit('close', null);
       const result = await resultPromise;
       expect(result.timedOut).toBe(true);

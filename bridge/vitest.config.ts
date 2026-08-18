@@ -19,26 +19,30 @@ export default defineConfig({
         'src/index.ts',
       ],
       // Thresholds set ~5 points below the measured baseline (vitest run
-      // --coverage on 2026-08-18, after adding the fake-timer SIGKILL-
-      // escalation test (M8) for claude-runner.ts, produced:
-      //   stmts 64.57 / branches 70 / funcs 75.75 / lines 65.4
-      // (previous baseline, 2026-08-17, before M8:
-      //   stmts 63.42 / branches 68.75 / funcs 72.72 / lines 64.77)
+      // --coverage on 2026-08-18, after closing the SIGKILL liveness-guard
+      // test gaps for claude-runner.ts — pinning the killTimer's clearTimeout
+      // cancellation (previously masked by the 'exit' listener) and adding a
+      // fake-timer test for the `exited === true` suppression branch —
+      // produced:
+      //   stmts 65.16 / branches 71.25 / funcs 76.47 / lines 66.04
+      // (previous baseline, 2026-08-18 earlier same day, before this pass:
+      //   stmts 65.16 / branches 70 / funcs 76.47 / lines 66.04)
       // sse-client.ts is largely untested beyond parseSseFrame (pre-existing
       // gap, out of scope for this pass) and pulls the aggregate down;
       // config.ts and claude-runner.ts get their own tighter per-file floors.
-      // claude-runner.ts now measures stmts 100 / branches 91.66 / funcs 90
-      // / lines 100 - the one still-uncovered branch is the *other* side of
-      // the killTimer's `if (!child.killed)` check (the case where the
-      // SIGTERM kill() call already reported `killed`, so SIGKILL is
-      // skipped), which no test drives all the way to that timer firing.
+      // claude-runner.ts now measures stmts 100 / branches 100 / funcs 90.9
+      // / lines 100 - both sides of the killTimer's `if (!exited)` guard
+      // (escalate vs. suppress) are now exercised by fake-timer tests; the
+      // remaining function-coverage gap is the no-op `.catch(() => {})`
+      // callback on the `finally` block's temp-dir `rm()` cleanup (line
+      // 228), unrelated to the killTimer guard.
       thresholds: {
         statements: 59,
         branches: 65,
         functions: 70,
         lines: 60,
         'src/config.ts': { statements: 95, branches: 95, functions: 95, lines: 95 },
-        'src/claude-runner.ts': { statements: 95, branches: 85, functions: 85, lines: 95 },
+        'src/claude-runner.ts': { statements: 95, branches: 95, functions: 85, lines: 95 },
       },
     },
   },

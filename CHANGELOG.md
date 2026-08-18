@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   boots instead of dying with `ERR_MODULE_NOT_FOUND`; `dist/` no longer
   ships compiled test files (builds go through `tsconfig.build.json`).
   The systemd/tsx deploy path is unchanged and verified byte-identical.
+- **`claude-runner`'s SIGKILL escalation guard was dead code.** Node flips
+  `ChildProcess#killed` to true as soon as the initial `kill('SIGTERM')`
+  call successfully delivers the signal, not when the child actually
+  exits, so the 5s killTimer's `if (!child.killed) child.kill('SIGKILL')`
+  read `killed` as already true and never escalated — a headless Claude
+  child that ignored SIGTERM (e.g. wedged) would survive the timeout
+  indefinitely. The guard now tracks real termination via the child's
+  `exit` event instead. Verified against a real child process that traps
+  SIGTERM and stays alive: the old guard left it running, the fixed guard
+  SIGKILLs it after the escalation delay.
 
 ## [0.2.2] - 2026-06-16
 
