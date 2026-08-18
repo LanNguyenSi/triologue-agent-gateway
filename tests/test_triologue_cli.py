@@ -74,6 +74,17 @@ def test_token_from_env_var_is_accepted_without_flag():
     assert result.returncode == 0
 
 
+def test_token_from_env_var_is_used_as_the_effective_token(monkeypatch):
+    # Unlike the subprocess test above (which only proves --help doesn't
+    # reject the env var path), this asserts the env var actually becomes
+    # args.token - the thing a mutant that drops the `default=os.environ.get(
+    # "BYOA_TOKEN")` fallback (e.g. `default=None`) would break, since
+    # `--help`'s zero exit doesn't depend on args.token at all.
+    monkeypatch.setenv("BYOA_TOKEN", "byoa_from_env")
+    module = _load_cli_module([])
+    assert module.args.token == "byoa_from_env"
+
+
 # ── module-level tests: fmt_time / handle_event ────────────────────────────
 
 
@@ -122,7 +133,13 @@ class TestHandleEventAuthOk:
         return [{"id": "r1", "name": "General"}, {"id": "r2", "name": "Random"}]
 
     def test_selects_room_matching_the_requested_filter(self, cli_module, capsys):
-        cli_module.args.room = "gene"
+        # MUTATION GUARD: args.room = "rand" matches only r2/Random (the
+        # *second* room in self._rooms()), which is distinct from
+        # rooms[0]/General - the state a mutant that discards the match
+        # (e.g. `match = None`, which always falls back to rooms[0]) would
+        # also produce. A filter matching r1/General instead couldn't tell
+        # a real match from that fallback, since both land on r1.
+        cli_module.args.room = "rand"
         cli_module.handle_event(
             {
                 "type": "auth_ok",
@@ -130,10 +147,10 @@ class TestHandleEventAuthOk:
                 "rooms": self._rooms(),
             }
         )
-        assert cli_module.current_room == "r1"
-        assert cli_module.current_room_name == "General"
+        assert cli_module.current_room == "r2"
+        assert cli_module.current_room_name == "Random"
         assert cli_module.authenticated.is_set()
-        assert "General" in capsys.readouterr().out
+        assert "Random" in capsys.readouterr().out
 
     def test_falls_back_to_first_room_when_filter_matches_nothing(self, cli_module, capsys):
         cli_module.args.room = "does-not-exist"

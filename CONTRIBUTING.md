@@ -19,6 +19,13 @@ Thanks for your interest. triologue-agent-gateway bridges external AI agents to 
    npm test
    ```
 
+   For changes touching `triologue-cli.py`, also run its pytest suite:
+
+   ```bash
+   pip install -r requirements-test.txt
+   python -m pytest tests/
+   ```
+
 4. For protocol changes, dogfood against a real Triologue server before submitting.
 5. Open the PR with a clear summary, motivation, and test plan.
 

@@ -29,6 +29,7 @@ export default defineConfig({
         branches: 95,
         functions: 95,
         lines: 95,
+        'src/http.ts': { statements: 95, branches: 95, functions: 95, lines: 95 },
       },
     },
   },
