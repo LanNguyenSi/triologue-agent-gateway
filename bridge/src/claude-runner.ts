@@ -184,6 +184,17 @@ export async function runClaude(
     child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
 
     let timedOut = false;
+    // `child.killed` is NOT a liveness check: Node flips it to true as
+    // soon as the kill('SIGTERM') call itself successfully delivers the
+    // signal, not when the process actually exits. A child that installs
+    // a SIGTERM handler and ignores it already reads `killed === true`
+    // at that point, so gating the hard kill below on `!child.killed`
+    // would never escalate. Track real termination via the child's own
+    // 'exit' event instead.
+    let exited = false;
+    child.once('exit', () => {
+      exited = true;
+    });
     let killTimer: NodeJS.Timeout | null = null;
     const softTimer = setTimeout(() => {
       timedOut = true;
@@ -193,7 +204,7 @@ export async function runClaude(
       // would leave the timer armed and fire an ESRCH-swallowed
       // kill on a dead PID later.
       killTimer = setTimeout(() => {
-        if (!child.killed) child.kill('SIGKILL');
+        if (!exited) child.kill('SIGKILL');
       }, 5_000);
       killTimer.unref();
     }, cfg.claudeTimeoutMs);
