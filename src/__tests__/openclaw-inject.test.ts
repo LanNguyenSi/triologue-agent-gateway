@@ -23,6 +23,7 @@
  *   M1: injectToSession stops rejecting on a socket 'error' event
  *   M2: injectToSession stops clearing/rejecting on the 8s TIMEOUT_MS
  *   M3: injectToSession stops catching a JSON.parse failure
+ *   M4: the module-is-main guard stops gating the bottom CLI block
  */
 
 import { EventEmitter } from 'node:events';
@@ -43,12 +44,64 @@ vi.mock('ws', () => ({ default: MockWebSocket }));
 
 const { injectToSession } = await import('../openclaw-inject.js');
 
+// Captured immediately after import, before the `beforeEach` below resets
+// MockWebSocket.instances - so it can't mask a side effect that happened
+// at import time (see the module-is-main guard test further down).
+const webSocketInstancesRightAfterImport = MockWebSocket.instances.length;
+
 beforeEach(() => {
   MockWebSocket.instances = [];
 });
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('module-is-main entrypoint guard', () => {
+  it('does not open a WebSocket merely by importing this module for its injectToSession export (M4, baseline)', () => {
+    // Baseline sanity check only - NOT a mutation guard by itself. In this
+    // vitest fork worker, process.argv is [node,
+    // .../vitest/dist/workers/forks.js] (no third element), so
+    // process.argv[2] is undefined regardless of what the `isMainModule &&`
+    // guard is replaced with; a mutant here would still leave this
+    // assertion green. The actual M4 guard is the test below, which sets
+    // process.argv[2] itself before re-importing the module fresh.
+    expect(webSocketInstancesRightAfterImport).toBe(0);
+  });
+
+  it('does not open a WebSocket at import time even with a truthy process.argv[2] (M4)', async () => {
+    // MUTATION GUARD M4: this is the actual discriminator for the
+    // `if (isMainModule && process.argv[2])` guard at the bottom of
+    // openclaw-inject.ts. The test above can't drive process.argv[2] to a
+    // truthy value (it's whatever vitest's own worker process happens to be
+    // invoked with), so it can't distinguish the fixed guard from either the
+    // pre-fix `if (process.argv[2])` (drops `isMainModule &&`) or a
+    // hardcoded `const isMainModule = true`. Here we force argv[2] to a
+    // truthy value ourselves, reset the module registry, and re-import the
+    // module fresh:
+    //  - with the real guard: process.argv[1] (this vitest worker's own
+    //    entrypoint) never equals fileURLToPath(import.meta.url) for
+    //    openclaw-inject.ts, so isMainModule is false and the CLI block is
+    //    skipped regardless of argv[2] - no WebSocket is constructed.
+    //  - with `if (process.argv[2])` (isMainModule check dropped): argv[2]
+    //    alone is truthy, so injectToSession() runs at import time and
+    //    constructs a WebSocket.
+    //  - with `const isMainModule = true`: same outcome, since
+    //    `true && process.argv[2]` is also truthy.
+    // Verified locally against both mutants (each turned this assertion
+    // red) and reverted; see the task's acceptance criteria for the mutant
+    // diffs used.
+    const originalArgv = process.argv;
+    try {
+      process.argv = [...originalArgv];
+      process.argv[2] = 'probe message';
+      vi.resetModules();
+      await import('../openclaw-inject.js');
+      expect(MockWebSocket.instances.length).toBe(0);
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
 });
 
 describe('injectToSession - failure paths (no OpenClaw identity present)', () => {
