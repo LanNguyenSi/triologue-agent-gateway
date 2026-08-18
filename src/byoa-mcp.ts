@@ -45,9 +45,9 @@ import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { z } from 'zod';
-import { authenticateToken } from './auth';
-import type { TriologueBridge } from './triologue-bridge';
-import type { AgentInfo } from './types';
+import { authenticateToken } from './auth.js';
+import type { TriologueBridge } from './triologue-bridge.js';
+import type { AgentInfo } from './types.js';
 
 let bridgeRef: TriologueBridge | null = null;
 

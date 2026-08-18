@@ -27,7 +27,7 @@
 import http from 'http';
 import https from 'https';
 import { randomUUID } from 'crypto';
-import { OpenClawBridge } from '../src/openclaw-bridge';
+import { OpenClawBridge } from '../src/openclaw-bridge.js';
 
 // ── Config ──
 

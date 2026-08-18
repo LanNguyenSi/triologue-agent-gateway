@@ -15,12 +15,12 @@
 import { Request, Response, NextFunction, Router } from 'express';
 import crypto from 'crypto';
 import { Redis } from 'ioredis';
-import { metrics } from './metrics';
-import type { AgentInfo } from './types';
-import type { TriologueBridge } from './triologue-bridge';
+import { metrics } from './metrics.js';
+import type { AgentInfo } from './types.js';
+import type { TriologueBridge } from './triologue-bridge.js';
 
 // Use existing auth system
-import { authenticateToken } from './auth';
+import { authenticateToken } from './auth.js';
 
 // ── Bridge reference (injected from index.ts) ──
 let bridge: TriologueBridge | null = null;

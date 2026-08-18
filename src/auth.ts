@@ -10,7 +10,7 @@
  */
 
 import fs from 'fs';
-import type { AgentInfo } from './types';
+import type { AgentInfo } from './types.js';
 
 interface AgentConfig {
   token: string;
