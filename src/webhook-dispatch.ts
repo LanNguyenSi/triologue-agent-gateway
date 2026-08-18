@@ -6,7 +6,7 @@
  */
 
 import { createHmac } from 'node:crypto';
-import { metrics } from './metrics';
+import { metrics } from './metrics.js';
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000; // 1s, 2s, 4s

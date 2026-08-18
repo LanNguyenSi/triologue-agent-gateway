@@ -15,7 +15,13 @@ import { io as SocketIOClient, Socket } from 'socket.io-client';
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
-import type { AgentInfo } from './types';
+import { fileURLToPath } from 'node:url';
+import type { AgentInfo } from './types.js';
+
+// __dirname has no ESM equivalent global (root package.json is
+// "type": "module"); derive it from import.meta.url the same way as the
+// module-is-main guard in index.ts.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export interface BridgeConfig {
   trioUrl: string;        // http://localhost:4001

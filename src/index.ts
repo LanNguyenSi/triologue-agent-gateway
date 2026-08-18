@@ -14,17 +14,17 @@ import express from 'express';
 import { createServer } from 'http';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
-import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAgentByUsername, getAllAgents, startSync, stopSync } from './auth';
-import { dispatchWebhook } from './webhook-dispatch';
-import { TriologueBridge } from './triologue-bridge';
-import { shouldDeliver } from './loop-guard';
-import { injectToSession } from './openclaw-inject';
-import { loadReadTracker, getLastSeenMessageId, markMessageSeen } from './read-tracker';
-import { metrics } from './metrics';
-import { sseRouter, shutdownSSE, setBridge as setSSEBridge, hasSSEClient, fanoutToSSEClient } from './byoa-sse';
-import { mcpRouter, setBridge as setMCPBridge } from './byoa-mcp';
-import { createAgentTasksBridgeRouter } from './agent-tasks-bridge';
-import type { AgentInfo, WsClient } from './types';
+import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAgentByUsername, getAllAgents, startSync, stopSync } from './auth.js';
+import { dispatchWebhook } from './webhook-dispatch.js';
+import { TriologueBridge } from './triologue-bridge.js';
+import { shouldDeliver } from './loop-guard.js';
+import { injectToSession } from './openclaw-inject.js';
+import { loadReadTracker, getLastSeenMessageId, markMessageSeen } from './read-tracker.js';
+import { metrics } from './metrics.js';
+import { sseRouter, shutdownSSE, setBridge as setSSEBridge, hasSSEClient, fanoutToSSEClient } from './byoa-sse.js';
+import { mcpRouter, setBridge as setMCPBridge } from './byoa-mcp.js';
+import { createAgentTasksBridgeRouter } from './agent-tasks-bridge.js';
+import type { AgentInfo, WsClient } from './types.js';
 
 // ── Config ──
 
@@ -701,6 +701,16 @@ async function main(): Promise<void> {
  * process.argv[1] comparison instead of a test-only env var keeps importing
  * this module side-effect-free: no console output, no process.exit, no
  * agent/read-tracker loads, no listen call.
+ *
+ * Caution - extensionless invocation defeats this guard silently:
+ * `fileURLToPath(import.meta.url)` always resolves to the full path
+ * *with* its file extension (`.../dist/index.js`), but `process.argv[1]`
+ * is whatever string was passed on the command line. `node dist/index`
+ * (dropping `.js`) leaves argv[1] as `.../dist/index`, which never equals
+ * the extensioned path, so `isMainModule` is false and `main()` never
+ * runs - the process exits 0 having done nothing, with no error printed.
+ * Always invoke with the explicit `.js` extension (as the Docker CMD and
+ * npm script here both do) or use `tsx src/index.ts`.
  */
 const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
 

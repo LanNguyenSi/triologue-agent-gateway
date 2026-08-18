@@ -17,7 +17,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import express from 'express';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import type { AgentInfo } from '../types';
+import type { AgentInfo } from '../types.js';
 
 const fakeAgent: AgentInfo = {
   name: 'Test Bot',
@@ -47,7 +47,7 @@ let server: Server;
 let baseUrl: string;
 
 beforeAll(async () => {
-  setBridge(bridgeMock as unknown as import('../triologue-bridge').TriologueBridge);
+  setBridge(bridgeMock as unknown as import('../triologue-bridge.js').TriologueBridge);
   const app = express();
   app.use(express.json());
   app.use('/byoa/mcp', mcpRouter);

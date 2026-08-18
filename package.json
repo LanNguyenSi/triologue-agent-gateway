@@ -2,10 +2,11 @@
   "name": "triologue-agent-gateway",
   "version": "0.2.2",
   "description": "Public Agent Gateway for Triologue — WebSocket + Webhook + CLI",
+  "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest"

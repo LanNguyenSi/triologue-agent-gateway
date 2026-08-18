@@ -1,8 +1,28 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
+    // ESM decision (task c4859f5b): dist/index.js died with ERR_MODULE_NOT_FOUND
+    // because the previous "module": "ESNext" + "moduleResolution": "bundler"
+    // combo let tsc accept extensionless relative imports (`from './auth'`)
+    // and emit ESM `import` syntax, while root package.json had no
+    // "type": "module" - so Node guessed CommonJS, detected ESM syntax,
+    // reparsed as ESM, and then applied strict ESM resolution (which
+    // requires explicit extensions) to every extensionless relative import.
+    // A CommonJS-output alternative was tried and rejected: index.ts's
+    // module-is-main guard (see below) and several tests rely on
+    // `import.meta` / top-level `await`, which CommonJS output cannot emit -
+    // fixing that would mean rewriting the guard and 9 test files, a much
+    // bigger and riskier change than this one.
+    // Fix: make the ESM story consistent instead - declare the package ESM
+    // (package.json "type": "module") and switch to Node's own ESM
+    // resolution algorithm (NodeNext), which requires (and this repo's
+    // relative imports now carry) explicit ".js" extensions. This is
+    // deploy-neutral: `tsx src/index.ts` (the systemd/prod path) and vitest
+    // (Vite-based transform) both resolve extensionless imports themselves
+    // and ignore this compiler option, so only `npm run build` /
+    // `node dist/*.js` output is affected.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "esModuleInterop": true,
     "strict": true,
     "outDir": "dist",
