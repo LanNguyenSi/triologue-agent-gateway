@@ -15,6 +15,8 @@
  *   M6: runClaude stops cleaning up the temp dir (finally block)
  *   M7: mcp.json is no longer written with mode 0o600
  *   M8: runClaude stops escalating to SIGKILL after the 5s killTimer
+ *   M9: runClaude stops suppressing SIGKILL once the child has actually
+ *       exited (the `exited === true` branch of the `if (!exited)` guard)
  */
 
 import { EventEmitter } from 'node:events';
@@ -367,7 +369,7 @@ describe('runClaude - failure paths', () => {
     }
   });
 
-  it('does not escalate to SIGKILL when the child exits cleanly within the 5s escalation window', async () => {
+  it('cancels the killTimer on a clean exit within the 5s escalation window (M8 clearTimeout)', async () => {
     vi.useFakeTimers();
     try {
       const mockChild = new MockChildProcess();
@@ -381,17 +383,68 @@ describe('runClaude - failure paths', () => {
       expect(mockChild.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
 
       // The child terminates promptly, well inside the 5s escalation
-      // window: the clean-exit path clears the killTimer once the
-      // 'close' Promise resolves.
+      // window.
       mockChild.emit('exit', null);
       mockChild.emit('close', null);
       await resultPromise;
 
-      // Advance well past the 5s escalation delay; no SIGKILL should
-      // follow because the killTimer was already cancelled.
+      // MUTATION GUARD (F1 fix): the previous version of this test only
+      // asserted that SIGKILL never fired, but that held even with
+      // `if (killTimer) clearTimeout(killTimer);` deleted, because the
+      // 'exit' listener above already sets `exited = true` and the
+      // killTimer callback's `if (!exited)` guard suppresses the kill
+      // independently of whether the timer itself was cancelled.
+      // Asserting on the fake-timer queue directly, right after the
+      // promise settles, pins that the killTimer handle was actually
+      // cleared: if the clearTimeout call is removed, the killTimer
+      // stays scheduled here and this fails even though no SIGKILL is
+      // ever observed.
+      expect(vi.getTimerCount()).toBe(0);
+
+      // Advance well past the 5s escalation delay for good measure; no
+      // SIGKILL should follow.
       await vi.advanceTimersByTimeAsync(5000);
       expect(mockChild.kill).toHaveBeenCalledTimes(1);
       expect(mockChild.kill).not.toHaveBeenCalledWith('SIGKILL');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('suppresses SIGKILL once the child has exited even before close fires (M9)', async () => {
+    vi.useFakeTimers();
+    try {
+      const mockChild = new MockChildProcess();
+      spawnMock.mockReturnValue(mockChild);
+      const cfg = makeCfg({ claudeTimeoutMs: 10 });
+
+      const resultPromise = runClaude(cfg, { message: makeMessage(), agent });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(mockChild.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
+
+      // The child has actually terminated - Node emits 'exit' as soon
+      // as the process is gone - but 'close' has not fired yet (stdio
+      // streams can still take a tick to drain). This isolates the
+      // `exited === true` branch of the killTimer's `if (!exited)`
+      // guard from the 'close'-driven cleanup path exercised by the
+      // test above.
+      mockChild.emit('exit', null);
+
+      // MUTATION GUARD M9: make the `child.once('exit', ...)` listener
+      // body a no-op -> `exited` never flips to true, the killTimer's
+      // `if (!exited)` guard stays open, and SIGKILL fires here too,
+      // failing the toHaveBeenCalledTimes(1) assertion below.
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(mockChild.kill).toHaveBeenCalledTimes(1);
+      expect(mockChild.kill).not.toHaveBeenCalledWith('SIGKILL');
+
+      // Let 'close' fire so the run settles cleanly and the test
+      // doesn't leak a pending Promise.
+      mockChild.emit('close', null);
+      const result = await resultPromise;
+      expect(result.timedOut).toBe(true);
     } finally {
       vi.useRealTimers();
     }
