@@ -14,6 +14,7 @@
  *   M5: runClaude stops killing the child on timeout
  *   M6: runClaude stops cleaning up the temp dir (finally block)
  *   M7: mcp.json is no longer written with mode 0o600
+ *   M8: runClaude stops escalating to SIGKILL after the 5s killTimer
  */
 
 import { EventEmitter } from 'node:events';
@@ -320,5 +321,53 @@ describe('runClaude - failure paths', () => {
 
     const result = await resultPromise;
     expect(result.timedOut).toBe(true);
+  });
+
+  it('escalates to SIGKILL 5s after SIGTERM when the child does not report killed (M8)', async () => {
+    vi.useFakeTimers();
+    try {
+      const mockChild = new MockChildProcess();
+      // The shared MockChildProcess.kill() sets `killed = true` on every
+      // call, which matches real Node (ChildProcess#killed flips true as
+      // soon as a signal is successfully delivered, regardless of whether
+      // the child actually exits - verified against a real child process
+      // that installs a SIGTERM handler and stays alive: `.killed` was
+      // still `true` right after the first kill() call). That means the
+      // 5s killTimer's `if (!child.killed) child.kill('SIGKILL')` guard
+      // reads `killed` as already true by the time it runs, so it never
+      // fires in the "process ignored SIGTERM" scenario the comment above
+      // it describes - only in a narrower race where the SIGTERM kill()
+      // call itself did not report success. This test reproduces that
+      // narrower case directly: kill() is overridden to never flip
+      // `killed`, so the guard's condition is observable and the SIGKILL
+      // branch (source ~line 196) executes. Flagged as an open question in
+      // the task report rather than "fixed" here - the source's own
+      // signal-handling logic is out of scope for this pass.
+      mockChild.kill = vi.fn((_signal?: string) => true);
+      spawnMock.mockReturnValue(mockChild);
+      const cfg = makeCfg({ claudeTimeoutMs: 10 });
+
+      const resultPromise = runClaude(cfg, { message: makeMessage(), agent });
+
+      // Flush the mkdtemp/writeFile mock-promise chain so spawn() runs,
+      // then advance past claudeTimeoutMs to fire the SIGTERM soft-kill.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(mockChild.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
+
+      // MUTATION GUARD M8: remove the killTimer's
+      // `if (!child.killed) child.kill('SIGKILL')` call -> this second
+      // kill() never happens and the assertions below fail.
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(mockChild.kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
+      expect(mockChild.kill).toHaveBeenCalledTimes(2);
+
+      mockChild.emit('close', null);
+      const result = await resultPromise;
+      expect(result.timedOut).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

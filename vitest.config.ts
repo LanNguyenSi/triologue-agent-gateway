@@ -29,6 +29,13 @@ export default defineConfig({
       // get their own per-file floors below, ratcheted from their measured
       // values with headroom. byoa-mcp.ts and webhook-dispatch.ts remain
       // pre-existing gaps out of scope for this pass.
+      //
+      // openclaw-inject.ts re-measured 2026-08-18 after adding its
+      // module-is-main entrypoint guard (mirroring index.ts's isMainModule
+      // seam) plus the import-side-effect-free test: stmts 58.2 / branches
+      // 30 / funcs 50 / lines 60.65 (previous baseline: stmts 57.57 /
+      // branches 27.77 / funcs 50 / lines 60). The guarded CLI tail stays
+      // uncovered by design, same as index.ts's main() block.
       thresholds: {
         statements: 54,
         branches: 42,
@@ -39,7 +46,7 @@ export default defineConfig({
         'src/byoa-sse.ts': { statements: 46, branches: 38, functions: 38, lines: 46 },
         'src/index.ts': { statements: 14, branches: 10, functions: 0, lines: 14 },
         'src/openclaw-bridge.ts': { statements: 90, branches: 65, functions: 90, lines: 90 },
-        'src/openclaw-inject.ts': { statements: 50, branches: 22, functions: 45, lines: 52 },
+        'src/openclaw-inject.ts': { statements: 53, branches: 25, functions: 45, lines: 55 },
         'src/triologue-bridge.ts': { statements: 70, branches: 38, functions: 68, lines: 70 },
         'src/metrics.ts': { statements: 60, branches: 42, functions: 75, lines: 62 },
         // The 100 floor is deliberate (file is fully covered today); when the

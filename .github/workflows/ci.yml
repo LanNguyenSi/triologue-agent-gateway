@@ -102,3 +102,20 @@ jobs:
         if: matrix.node-version == '22.x'
         working-directory: sdk
         run: npm audit --audit-level=high
+
+      # triologue-cli.py is a standalone Python script; its pytest suite
+      # only needs to run once, so it's gated to one matrix leg like the
+      # bridge/sdk audit steps above.
+      - name: Setup Python
+        if: matrix.node-version == '22.x'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python test dependencies
+        if: matrix.node-version == '22.x'
+        run: pip install -r requirements-test.txt
+
+      - name: Test triologue-cli.py
+        if: matrix.node-version == '22.x'
+        run: python -m pytest tests/ -v

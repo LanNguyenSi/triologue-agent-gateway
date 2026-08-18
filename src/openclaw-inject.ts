@@ -18,6 +18,7 @@
 import WebSocket from 'ws';
 import { randomUUID, createPrivateKey, createPublicKey, sign as cryptoSign } from 'crypto';
 import * as fs from 'fs';
+import { fileURLToPath } from 'node:url';
 
 const GATEWAY_TOKEN = (() => {
   try {
@@ -135,8 +136,28 @@ export async function injectToSession(message: string): Promise<void> {
   });
 }
 
+/**
+ * Module-is-main entrypoint guard: true only when this file is the process
+ * entrypoint (`tsx src/openclaw-inject.ts "message"` / `node
+ * dist/openclaw-inject.js "message"`), false when it is imported (e.g.
+ * index.ts importing `injectToSession`, or a test importing this module).
+ * Same seam as src/index.ts's `isMainModule` guard - see there for the
+ * rationale and the extensionless-invocation footgun.
+ *
+ * Caution - extensionless invocation defeats this guard silently:
+ * `fileURLToPath(import.meta.url)` always resolves to the full path *with*
+ * its file extension (`.../dist/openclaw-inject.js`), but `process.argv[1]`
+ * is whatever string was passed on the command line. `node
+ * dist/openclaw-inject "test message"` (dropping `.js`) leaves argv[1] as
+ * `.../dist/openclaw-inject`, which never equals the extensioned path, so
+ * `isMainModule` is false and the CLI block below never runs - the process
+ * just exits 0 having done nothing. Always invoke with the explicit `.js`
+ * extension, or use `tsx src/openclaw-inject.ts`.
+ */
+const isMainModule = process.argv[1] === fileURLToPath(import.meta.url);
+
 // CLI test: npx tsx src/openclaw-inject.ts "test message"
-if (process.argv[2]) {
+if (isMainModule && process.argv[2]) {
   injectToSession(process.argv[2])
     .then(() => { console.log('✅ Injected!'); process.exit(0); })
     .catch(e => { console.error('❌', e.message); process.exit(1); });

@@ -23,6 +23,7 @@
  *   M1: injectToSession stops rejecting on a socket 'error' event
  *   M2: injectToSession stops clearing/rejecting on the 8s TIMEOUT_MS
  *   M3: injectToSession stops catching a JSON.parse failure
+ *   M4: the module-is-main guard stops gating the bottom CLI block
  */
 
 import { EventEmitter } from 'node:events';
@@ -43,12 +44,33 @@ vi.mock('ws', () => ({ default: MockWebSocket }));
 
 const { injectToSession } = await import('../openclaw-inject.js');
 
+// Captured immediately after import, before the `beforeEach` below resets
+// MockWebSocket.instances - so it can't mask a side effect that happened
+// at import time (see the module-is-main guard test further down).
+const webSocketInstancesRightAfterImport = MockWebSocket.instances.length;
+
 beforeEach(() => {
   MockWebSocket.instances = [];
 });
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('module-is-main entrypoint guard', () => {
+  it('does not open a WebSocket merely by importing this module for its injectToSession export (M4)', () => {
+    // MUTATION GUARD M4: if the `if (isMainModule && process.argv[2])`
+    // guard at the bottom of openclaw-inject.ts were replaced with the
+    // pre-fix `if (process.argv[2])`, a truthy process.argv[2] in this
+    // test runner's own argv would trigger injectToSession() as a side
+    // effect of the top-level import above - opening a WebSocket (and
+    // eventually calling process.exit() from inside this test file) even
+    // though this file only imports `{ injectToSession }` to call it
+    // explicitly per-test below. Verified by temporarily forcing the guard
+    // true locally: a WebSocket instance appears at import time; reverted
+    // after.
+    expect(webSocketInstancesRightAfterImport).toBe(0);
+  });
 });
 
 describe('injectToSession - failure paths (no OpenClaw identity present)', () => {
