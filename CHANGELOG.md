@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `exit` event instead. Verified against a real child process that traps
   SIGTERM and stays alive: the old guard left it running, the fixed guard
   SIGKILLs it after the escalation delay.
+- **`claude-runner`'s softTimer/killTimer leaked when spawn rejected.**
+  Both timers were only cleared after the exit-wait `Promise` resolved
+  successfully; on the `child.once('error', reject)` path (e.g. ENOENT for
+  a missing `claude` binary: Node emits `error` + `close`, never `exit`,
+  with `pid` undefined) that clear was skipped, so the softTimer still
+  fired at `claudeTimeoutMs` and called `kill('SIGTERM')` on a child that
+  never spawned, arming a killTimer that likewise fired a no-op
+  `kill('SIGKILL')` 5s later. The clears now run in a `finally` around the
+  await, so both timers are cancelled on the reject path too.
 
 ## [0.2.2] - 2026-06-16
 
