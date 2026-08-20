@@ -306,6 +306,34 @@ describe('runClaude - failure paths', () => {
     expect(fsMocks.rm).toHaveBeenCalledWith(FAKE_TMP_DIR, { recursive: true, force: true });
   });
 
+  it('clears softTimer/killTimer when spawn errors instead of leaking them (timer leak fix)', async () => {
+    vi.useFakeTimers();
+    try {
+      const mockChild = new MockChildProcess();
+      spawnMock.mockReturnValue(mockChild);
+      const cfg = makeCfg({ claudeTimeoutMs: 120_000 });
+
+      const resultPromise = runClaude(cfg, { message: makeMessage(), agent });
+
+      // Flush the mkdtemp/writeFile mock-promise chain so spawn() runs and
+      // softTimer gets armed, then emit the ENOENT-style 'error' before
+      // claudeTimeoutMs elapses — the same case Node hits for a missing
+      // claude binary: 'error' + 'close' fire, 'exit' never does.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      const err = Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' });
+      mockChild.emit('error', err);
+
+      await expect(resultPromise).rejects.toThrow('spawn claude ENOENT');
+
+      // MUTATION GUARD: remove the try/finally around the await (or its
+      // clearTimeout calls) -> softTimer stays armed here and this fails.
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('kills the child with SIGTERM and reports timedOut once claudeTimeoutMs elapses (M5)', async () => {
     const mockChild = new MockChildProcess();
     spawnMock.mockReturnValue(mockChild);

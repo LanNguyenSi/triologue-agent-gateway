@@ -210,12 +210,20 @@ export async function runClaude(
     }, cfg.claudeTimeoutMs);
     softTimer.unref();
 
-    const exitCode: number = await new Promise((resolve, reject) => {
-      child.once('error', reject);
-      child.once('close', (code) => resolve(code ?? 0));
-    });
-    clearTimeout(softTimer);
-    if (killTimer) clearTimeout(killTimer);
+    // Clear both timers in a finally so a rejection (child.once('error',
+    // reject), e.g. ENOENT for a missing claude binary — no 'exit' or
+    // 'close' ever fires) doesn't leave softTimer/killTimer armed against
+    // a child that was never spawned.
+    let exitCode: number;
+    try {
+      exitCode = await new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('close', (code) => resolve(code ?? 0));
+      });
+    } finally {
+      clearTimeout(softTimer);
+      if (killTimer) clearTimeout(killTimer);
+    }
 
     return {
       exitCode,
