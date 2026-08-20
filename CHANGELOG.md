@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-20
+
 ### Fixed
 
 - The package is now genuinely ESM (`type: module`, NodeNext resolution,

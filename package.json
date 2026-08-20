@@ -1,6 +1,6 @@
 {
   "name": "triologue-agent-gateway",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Public Agent Gateway for Triologue — WebSocket + Webhook + CLI",
   "type": "module",
   "scripts": {
