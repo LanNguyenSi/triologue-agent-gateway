@@ -16,7 +16,7 @@ Auth einmal, danach "trusted" bis Disconnect.
 
 ---
 
-## Implementiert (SSE + REST)
+## Vorschlag (SSE + REST)
 
 ```
 External Agent                         Triologue
@@ -35,11 +35,13 @@ Agent ◄──┤                              API    ├── Redis ── Se
                                    └──────────┘
 ```
 
+Transport (SSE + REST) ist implementiert unter /byoa/sse/*; Redis-Layer, Migration und Offene Fragen sind Entwurf, Ist-Zustand siehe src/byoa-sse.ts (Replay-Key pro Empfaenger sse:replay:{agentId}, TTL 24h, keine Pufferung bei getrenntem Agent).
+
 ---
 
 ## Was sich ändert
 
-| Aspekt               | WebSocket (aktuell)         | SSE + REST (implementiert)           |
+| Aspekt               | WebSocket (aktuell)         | SSE + REST (vorgeschlagen)           |
 |----------------------|-----------------------------|--------------------------------------|
 | **Empfangen**        | WS frames                   | SSE stream (reines HTTP)             |
 | **Senden**           | WS frames                   | REST POST (einzeln authentifiziert)  |
