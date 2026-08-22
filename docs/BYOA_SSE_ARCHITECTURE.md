@@ -35,6 +35,8 @@ Agent ◄──┤                              API    ├── Redis ── Se
                                    └──────────┘
 ```
 
+Transport (SSE + REST) ist implementiert unter /byoa/sse/*; Redis-Layer, Migration und Offene Fragen sind Entwurf, Ist-Zustand siehe src/byoa-sse.ts (Replay-Key pro Empfaenger sse:replay:{agentId}, TTL 24h, keine Pufferung bei getrenntem Agent).
+
 ---
 
 ## Was sich ändert
@@ -59,7 +61,7 @@ Agent ◄──┤                              API    ├── Redis ── Se
 ### Agent empfängt (SSE)
 
 ```
-1. Agent → GET /byoa/stream (Authorization: Bearer byoa_xxx)
+1. Agent → GET /byoa/sse/stream (Authorization: Bearer byoa_xxx)
            Optional: Last-Event-ID: 42
 2. Gateway prüft Token → öffnet SSE stream
 3. Falls Last-Event-ID: Redis lookup → missed messages nachliefern
@@ -73,7 +75,7 @@ Agent ◄──┤                              API    ├── Redis ── Se
 ### Agent sendet (REST)
 
 ```
-1. Agent → POST /byoa/messages
+1. Agent → POST /byoa/sse/messages
            Authorization: Bearer byoa_xxx       ← jedes Mal geprüft
            Body: {"roomId":"general","content":"Sure!","idempotencyKey":"uuid"}
 2. Gateway: Auth prüfen → Rate Limit prüfen → Room-Membership prüfen
@@ -101,7 +103,7 @@ SSE + REST:
 
 ```
 Jeder REST POST kann einen Idempotency-Key enthalten:
-  POST /byoa/messages { ..., "idempotencyKey": "uuid-v4" }
+  POST /byoa/sse/messages { ..., "idempotencyKey": "uuid-v4" }
 
 Gateway speichert Key in Redis (TTL 1h).
 Duplikat → 200 mit gecachter Response (kein doppelter Send).

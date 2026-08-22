@@ -123,7 +123,7 @@ cd bridge
 npm install
 npm run dev      # tsx watch mode
 npm run build    # tsc → dist/
-npm run test     # vitest (25 unit tests on mention / queue / sse parser)
+npm run test     # vitest unit tests (mention, queue, sse parser, config, claude runner)
 ```
 
 Out of scope for the current cut:
