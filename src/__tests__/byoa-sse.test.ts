@@ -12,6 +12,9 @@
  *   - shutdownSSE closes all open connections
  *   - GET /status includes mentionKey and receiveMode
  *   - POST /messages sets Retry-After and X-RateLimit-* headers on 429
+ *   - POST /tokens/rotate: 401 on missing/invalid auth, 501 with a
+ *     documented body for a valid token, and the presented token still
+ *     authenticates afterwards (nothing about it changed)
  *
  * Mutation guard:
  *   M-fanout: break the per-agent target filter in fanout (deliver to all
@@ -20,6 +23,8 @@
  *   → the GET /status test fails.
  *   M-429-headers: stop setting Retry-After/X-RateLimit-* on the 429 path
  *   → the rate-limiting test fails.
+ *   M-rotate-auth-order: answer /tokens/rotate before authenticateSSE
+ *   rejects an invalid/missing token → the 401-before-501 tests fail.
  */
 
 import {
@@ -506,5 +511,53 @@ describe('rate limiting (429)', () => {
     expect(Number(headers['retry-after'])).toBe(body.retryAfter);
     expect(headers['x-ratelimit-limit']).toBe('10');
     expect(headers['x-ratelimit-remaining']).toBe('0');
+  });
+});
+
+describe('POST /tokens/rotate', () => {
+  it('returns 401 without a body when the Authorization header is missing (MUTATION GUARD: auth runs before the 501 answer)', async () => {
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = http.request(
+        { hostname: '127.0.0.1', port, path: '/byoa/sse/tokens/rotate', method: 'POST' },
+        (res) => resolve(res.statusCode ?? 0),
+      );
+      req.on('error', reject);
+      req.end();
+    });
+    expect(status).toBe(401);
+  });
+
+  it('returns 401 for an invalid token, never reaching the 501 answer', async () => {
+    authenticateTokenMock.mockReturnValue(null);
+    const { status } = await postJSON('/byoa/sse/tokens/rotate', 'bad-token', {});
+    expect(status).toBe(401);
+  });
+
+  it('returns 501 with a documented body for a valid token', async () => {
+    authenticateTokenMock.mockReturnValue(fakeAgent);
+
+    const { status, body } = await postJSON('/byoa/sse/tokens/rotate', 'valid-token', {});
+
+    expect(status).toBe(501);
+    // MUTATION GUARD: if any of these fields are dropped or renamed, this
+    // fails, since callers (examples/sse-client.ts) rely on `error` to
+    // detect "not implemented" and BYOA.md documents these exact field names.
+    expect(body.error).toBe('not_implemented');
+    expect(typeof body.message).toBe('string');
+    expect(body.message.length).toBeGreaterThan(0);
+    expect(body.docs).toBe('BYOA.md#token-rotation');
+  });
+
+  it('leaves the presented token authenticating after the call, rotation changed nothing', async () => {
+    authenticateTokenMock.mockReturnValue(fakeAgent);
+
+    await postJSON('/byoa/sse/tokens/rotate', 'valid-token', {});
+
+    // The route never touches auth state, so a follow-up request with the
+    // same token still authenticates via the unchanged authenticateToken
+    // mock: nothing was rotated, invalidated, or replaced.
+    const { status } = await getJSON('/byoa/sse/status', 'valid-token');
+    expect(status).toBe(200);
+    expect(authenticateTokenMock).toHaveBeenCalledWith('valid-token');
   });
 });

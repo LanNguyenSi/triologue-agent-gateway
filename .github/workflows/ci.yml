@@ -42,6 +42,12 @@ jobs:
       - name: Build
         run: npm run build
 
+      # --audit-level=high scans only npm/package-lock.json dependencies, so
+      # it cannot and does not need to cover pip alerts on requirements-test.txt
+      # (e.g. GHSA-6w46-j5rx-g56g / Dependabot alert #39 on pytest, a
+      # different ecosystem entirely). Decision: pytest is pinned to 9.0.3
+      # in requirements-test.txt, which is the first patched version for
+      # that alert, so no separate pip-audit step was added here.
       - name: Audit (fail on high or critical)
         run: npm audit --audit-level=high
 

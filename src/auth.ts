@@ -1,10 +1,10 @@
 /**
  * Token authentication — validates byoa_ tokens.
- * 
+ *
  * Two modes:
  * 1. Config file (agents.json) — fallback, no DB dependency
  * 2. Triologue API — dynamic, reads from DB via /api/agents/gateway-config
- * 
+ *
  * On startup: tries API first, falls back to agents.json.
  * Periodic sync: refreshes from API every SYNC_INTERVAL_MS.
  */

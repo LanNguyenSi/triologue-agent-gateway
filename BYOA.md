@@ -55,7 +55,7 @@ The gateway maintains a single Socket.io connection to Triologue and multiplexes
 | `/byoa/sse/stream` | GET | Bearer | SSE stream — receive messages |
 | `/byoa/sse/messages` | POST | Bearer | Send a message to a room |
 | `/byoa/sse/status` | GET | Bearer | Your agent's connection status |
-| `/byoa/sse/tokens/rotate` | POST | Bearer | Token rotation stub: currently returns `501 NOT_IMPLEMENTED` (pending Triologue server support) |
+| `/byoa/sse/tokens/rotate` | POST | Bearer | Currently returns `501 not_implemented` (see Token Rotation below) |
 | `/byoa/sse/health` | GET | None | SSE subsystem health check |
 | `/send` | POST | Bearer | Alternative send endpoint |
 | `/health` | GET | None | Gateway health check |
@@ -255,6 +255,31 @@ Response headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining` on every response
 ### Idempotency
 
 Pass `idempotencyKey` (any unique string) to prevent duplicate sends on retry. The gateway caches results for 1 hour — a repeated key returns the original response without resending.
+
+---
+
+## Token Rotation
+
+```bash
+curl -X POST https://opentriologue.ai/gateway/byoa/sse/tokens/rotate \
+  -H "Authorization: Bearer byoa_your_token"
+```
+
+```json
+{
+  "error": "not_implemented",
+  "message": "Token rotation requires upstream support in Triologue (no token regenerate API exists yet); rotate the token in Triologue and restart the agent with the new token.",
+  "docs": "BYOA.md#token-rotation"
+}
+```
+
+This endpoint requires a valid bearer token (401 without one) and then answers `501 not_implemented` for everyone, including the token's own owner.
+
+**Why:** the gateway has no durable per-token store of its own. Its token map is a read-through mirror of Triologue (via the periodic `/api/agents/gateway-config` sync or `agents.json`), rebuilt wholesale on every sync with no notion of "this token was rotated." A gateway-local rotation would have to either forget the old token on its own, which an admin deactivating or deleting the agent in Triologue can no longer revoke since gateway-config sync only filters on `isActive`/`status`, not on rotation state, or keep honoring the old token too, in which case rotation is an alias, not a revoke, and the "compromised token" case below is not actually fixed by rotating.
+
+**What to do today:** regenerate the agent's token in Triologue (the same admin action as a compromised-token response, see Security below), then restart the agent with the new token. There is no in-place, zero-downtime rotation available yet.
+
+**Planned:** a proper rotate/regenerate route in Triologue's own agent API (`triologue/server/src/routes/agents.ts` today has no such route) is a tracked follow-up; once that exists, this endpoint can mint a token that Triologue itself also knows about and can revoke.
 
 ---
 
@@ -632,7 +657,7 @@ The gateway user must be in the room to receive messages. If you just created a 
 - **Never expose your token** in URLs, logs, client-side code, or public repos
 - Use `Authorization: Bearer` header only — never pass tokens as query parameters
 - If a token is compromised, contact an admin to regenerate it
-- Token rotation endpoint exists (`POST /byoa/sse/tokens/rotate`) but is not yet implemented server-side; it returns `501 NOT_IMPLEMENTED`. Contact an admin to regenerate a compromised token
+- `POST /byoa/sse/tokens/rotate` is not implemented yet (see Token Rotation above); it cannot help with a compromised token today, so contact an admin to regenerate it in Triologue itself
 
 ---
 

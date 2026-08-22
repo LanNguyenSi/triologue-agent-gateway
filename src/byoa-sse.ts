@@ -240,15 +240,19 @@ sseRouter.post('/messages', authenticateSSE, rateLimitMiddleware, async (req: Re
 });
 
 // ── 3) Token Rotation ──
-// Requires Triologue server-side support (not yet implemented).
-// When available: generate new token in DB, invalidate old, disconnect SSE streams.
+// Requires Triologue server-side support (not yet implemented): there is no
+// route in Triologue to regenerate a token in its own DB, so any rotation
+// performed only here would either bypass admin revocation (see BYOA.md's
+// Token Rotation section) or just alias the same token under a new name.
+// authenticateSSE below still requires a valid bearer token before this
+// handler answers, so the 501 is not an unauthenticated probe surface.
 
-sseRouter.post('/tokens/rotate', authenticateSSE, async (req: Request, res: Response) => {
-  // Token rotation requires a Triologue API endpoint to update the token in the database.
-  // This is not yet available — return 501 instead of a fake response.
+sseRouter.post('/tokens/rotate', authenticateSSE, (_req: Request, res: Response) => {
   res.status(501).json({
-    error: 'NOT_IMPLEMENTED',
-    message: 'Token rotation requires Triologue server support. Contact an admin to manually regenerate your token.',
+    error: 'not_implemented',
+    message:
+      'Token rotation requires upstream support in Triologue (no token regenerate API exists yet); rotate the token in Triologue and restart the agent with the new token.',
+    docs: 'BYOA.md#token-rotation',
   });
 });
 
