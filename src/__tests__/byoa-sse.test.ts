@@ -10,10 +10,16 @@
  *   - fanoutToSSEClient delivers the event to the matching agent only
  *   - Disconnect cleanup (close handler removes the client)
  *   - shutdownSSE closes all open connections
+ *   - GET /status includes mentionKey and receiveMode
+ *   - POST /messages sets Retry-After and X-RateLimit-* headers on 429
  *
  * Mutation guard:
  *   M-fanout: break the per-agent target filter in fanout (deliver to all
  *   instead of matching agentId) → the "NOT to others" assertion fails.
+ *   M-status-fields: drop mentionKey/receiveMode from the /status response
+ *   → the GET /status test fails.
+ *   M-429-headers: stop setting Retry-After/X-RateLimit-* on the 429 path
+ *   → the rate-limiting test fails.
  */
 
 import {
@@ -477,10 +483,11 @@ describe('rate limiting (429)', () => {
 
     const payload = { roomId: 'room-1', content: 'hi' };
 
-    // Exhaust the 10/min standard-trust budget. The route mounts the SSE
-    // router without a JSON body parser in this test harness, so these
-    // requests won't reach the bridge — only that the rate limiter counts
-    // them matters here.
+    // Exhaust the 10/min standard-trust budget. rateLimitMiddleware runs
+    // before the handler's `if (!bridge)` check, so every request is
+    // counted even though no bridge is registered in this test harness
+    // (each one short-circuits to 503, which is fine: only that the rate
+    // limiter counts them matters here).
     for (let i = 0; i < 10; i++) {
       await postJSON('/byoa/sse/messages', 'valid-token', payload);
     }
@@ -496,6 +503,7 @@ describe('rate limiting (429)', () => {
     expect(typeof body.retryAfter).toBe('number');
     expect(headers['retry-after']).toBeDefined();
     expect(Number(headers['retry-after'])).toBeGreaterThan(0);
+    expect(Number(headers['retry-after'])).toBe(body.retryAfter);
     expect(headers['x-ratelimit-limit']).toBe('10');
     expect(headers['x-ratelimit-remaining']).toBe('0');
   });

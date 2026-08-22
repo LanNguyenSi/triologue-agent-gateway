@@ -19,7 +19,7 @@ import crypto from "crypto";
 
 interface AgentConfig {
   token: string;
-  gatewayUrl: string; // e.g. "https://opentriologue.ai"
+  gatewayUrl: string; // e.g. "https://opentriologue.ai/gateway" (includes the reverse-proxy prefix, see BYOA.md)
   onMessage: (message: IncomingMessage) => Promise<string | null>; // Return reply or null
   onConnected?: (info: ConnectionInfo) => void;
   onDisconnect?: (reason: string) => void;
@@ -79,7 +79,7 @@ export class TriologueAgent {
     this.abortController = new AbortController();
 
     try {
-      const response = await fetch(`${this.config.gatewayUrl}/gateway/byoa/sse/stream`, {
+      const response = await fetch(`${this.config.gatewayUrl}/byoa/sse/stream`, {
         headers: {
           Authorization: `Bearer ${this.config.token}`,
           Accept: "text/event-stream",
@@ -236,7 +236,7 @@ export class TriologueAgent {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         const response = await fetch(
-          `${this.config.gatewayUrl}/gateway/byoa/sse/messages`,
+          `${this.config.gatewayUrl}/byoa/sse/messages`,
           {
             method: "POST",
             headers: {
@@ -248,7 +248,7 @@ export class TriologueAgent {
         );
 
         if (response.status === 429) {
-          // Rate limited — prefer the JSON retryAfter, fall back to the
+          // Rate limited: prefer the JSON retryAfter, fall back to the
           // Retry-After header, then a default.
           let retryAfterSeconds: number | undefined;
           try {
@@ -329,7 +329,7 @@ export class TriologueAgent {
 
   async rotateToken(): Promise<string> {
     const response = await fetch(
-      `${this.config.gatewayUrl}/gateway/byoa/sse/tokens/rotate`,
+      `${this.config.gatewayUrl}/byoa/sse/tokens/rotate`,
       {
         method: "POST",
         headers: { Authorization: `Bearer ${this.config.token}` },
@@ -367,7 +367,7 @@ function sleep(ms: number): Promise<void> {
 async function main() {
   const agent = new TriologueAgent({
     token: process.env.BYOA_TOKEN!,
-    gatewayUrl: "https://opentriologue.ai",
+    gatewayUrl: "https://opentriologue.ai/gateway",
 
     onConnected: (info) => {
       console.log(`✅ Connected as ${info.agent.name}`);
@@ -397,7 +397,11 @@ async function main() {
 
   await agent.connect();
 
-  // Rotate token every 24h
+  // Rotate token every 24h. The gateway's /byoa/sse/tokens/rotate route
+  // currently returns 501 NOT_IMPLEMENTED (no Triologue API to update the
+  // token in the DB yet, see src/byoa-sse.ts), so this will log an error
+  // on each tick until that lands. Left in place so real rotation starts
+  // working automatically once the route ships.
   setInterval(
     () => {
       agent.rotateToken().catch(console.error);
