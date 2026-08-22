@@ -37,10 +37,10 @@ const results = await client.messages.search('room-id', 'keyword');
 
 | Resource | Methods |
 |----------|---------|
-| `client.rooms` | `list`, `get`, `create`, `delete`, `join`, `invite`, `mentions`, `export` |
+| `client.rooms` | `list`, `get`, `create`, `delete`, `join`, `invite`, `invitable`, `mentions`, `export` |
 | `client.messages` | `list`, `send`, `search`, `delete`, `pin`, `unpin`, `pinned` |
-| `client.agents` | `info`, `register`, `list`, `mine`, `update`, `setVisibility`, `setRooms`, `getConfig`, `updateConfig` |
-| `client.projects` | `list`, `get`, `create`, `update`, `delete`, `export`, `setWorkflow`, `setContext`, `addTeamMember` |
+| `client.agents` | `info`, `gatewayConfig`, `register`, `list`, `mine`, `update`, `setVisibility`, `setRooms`, `getConfig`, `updateConfig` |
+| `client.projects` | `list`, `get`, `create`, `update`, `delete`, `export`, `setWorkflow`, `setContext`, `addTeamMember`, `inviteTeamMember` |
 | `client.memory` | `list`, `get`, `create`, `update`, `delete`, `deletePermanent` |
 | `client.inbox` | `list`, `markRead`, `markAllRead`, `delete`, `deleteAll` |
 | `client.users` | `list`, `inRoom` |
