@@ -428,6 +428,23 @@ describe('rotateToken', () => {
     }
   });
 
+  it('rejects the old token at the exact expiresAt instant, not only strictly after it (MUTATION GUARD: off-by-one on the grace comparison)', async () => {
+    vi.useFakeTimers();
+    try {
+      await seedAgents([makeRawAgent({ token: 'byoa_rot_grace_boundary', userId: 'user-rot-grace-boundary' })]);
+      rotateToken('byoa_rot_grace_boundary');
+
+      // Advance to exactly TOKEN_ROTATE_GRACE_MS: Date.now() === expiresAt.
+      vi.advanceTimersByTime(TOKEN_ROTATE_GRACE_MS);
+      // MUTATION GUARD: `<` vs `<=` on `Date.now() < grace.expiresAt` only
+      // differs at this exact instant; a mutant swapping to `<=` passes the
+      // "before"/"after" test above but fails only here.
+      expect(authenticateToken('byoa_rot_grace_boundary')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('permanently blocks a rotated-away token even if the upstream sync re-adds it (MUTATION GUARD: rotatedAwayTokens)', async () => {
     vi.useFakeTimers();
     try {
