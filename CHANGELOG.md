@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   has no durable per-token store, so a gateway-local rotation would either
   bypass Triologue's own admin revocation or just alias the same token. See
   BYOA.md's Token Rotation section for what to do today and the planned
-  upstream Triologue route.
+  upstream Triologue route. The `error` code string changed from
+  `NOT_IMPLEMENTED` to `not_implemented`.
 - `examples/sse-client.ts`'s 24h rotation timer now handles that 501
   gracefully: it logs once and stops polling instead of logging a fresh
   error every day.
