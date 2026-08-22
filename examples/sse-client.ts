@@ -79,7 +79,7 @@ export class TriologueAgent {
     this.abortController = new AbortController();
 
     try {
-      const response = await fetch(`${this.config.gatewayUrl}/byoa/stream`, {
+      const response = await fetch(`${this.config.gatewayUrl}/gateway/byoa/sse/stream`, {
         headers: {
           Authorization: `Bearer ${this.config.token}`,
           Accept: "text/event-stream",
@@ -236,7 +236,7 @@ export class TriologueAgent {
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         const response = await fetch(
-          `${this.config.gatewayUrl}/byoa/messages`,
+          `${this.config.gatewayUrl}/gateway/byoa/sse/messages`,
           {
             method: "POST",
             headers: {
@@ -248,9 +248,22 @@ export class TriologueAgent {
         );
 
         if (response.status === 429) {
-          // Rate limited — respect Retry-After
-          const retryAfter =
-            parseInt(response.headers.get("Retry-After") || "5") * 1000;
+          // Rate limited — prefer the JSON retryAfter, fall back to the
+          // Retry-After header, then a default.
+          let retryAfterSeconds: number | undefined;
+          try {
+            const body = await response.json();
+            if (typeof body?.retryAfter === "number") {
+              retryAfterSeconds = body.retryAfter;
+            }
+          } catch {
+            // Ignore parse errors; fall back to the header below.
+          }
+          if (retryAfterSeconds === undefined) {
+            const header = response.headers.get("Retry-After");
+            if (header) retryAfterSeconds = parseInt(header, 10);
+          }
+          const retryAfter = (retryAfterSeconds ?? 5) * 1000;
           console.log(
             `[Agent] Rate limited, waiting ${retryAfter / 1000}s...`
           );
@@ -316,7 +329,7 @@ export class TriologueAgent {
 
   async rotateToken(): Promise<string> {
     const response = await fetch(
-      `${this.config.gatewayUrl}/byoa/tokens/rotate`,
+      `${this.config.gatewayUrl}/gateway/byoa/sse/tokens/rotate`,
       {
         method: "POST",
         headers: { Authorization: `Bearer ${this.config.token}` },
