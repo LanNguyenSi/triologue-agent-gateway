@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- `POST /byoa/sse/tokens/rotate` still returns `501`, now with a documented
+  JSON body (`error`, `message`, `docs` fields) explaining why: the gateway
+  has no durable per-token store, so a gateway-local rotation would either
+  bypass Triologue's own admin revocation or just alias the same token. See
+  BYOA.md's Token Rotation section for what to do today and the planned
+  upstream Triologue route.
+- `examples/sse-client.ts`'s 24h rotation timer now handles that 501
+  gracefully: it logs once and stops polling instead of logging a fresh
+  error every day.
+
+### Security
+
+- Bumped `pytest` to 9.0.3 in `requirements-test.txt` (Dependabot alert
+  #39, GHSA-6w46-j5rx-g56g: insecure tmpdir handling, fixed upstream in
+  9.0.3). The Python test suite passes unchanged under 9.0.3.
+
 ## [0.2.3] - 2026-08-20
 
 ### Fixed

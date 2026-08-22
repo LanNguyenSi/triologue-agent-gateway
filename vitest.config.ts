@@ -5,7 +5,13 @@ export default defineConfig({
     globals: true,
     testTimeout: 10000,
     // Restrict to source tests; default glob also matches dist/**/*.test.js after build.
-    include: ['src/**/*.{test,spec}.ts'],
+    // examples/**/*.test.ts is a narrow addition: it lets a test for
+    // examples/sse-client.ts live next to it (importing it from src/__tests__
+    // fails tsc's rootDir check, since examples/ is outside "src"). examples/
+    // is not part of the Docker build (only src/ is copied, see Dockerfile)
+    // and is excluded from the coverage.include below, so this does not
+    // affect the build or the coverage gate.
+    include: ['src/**/*.{test,spec}.ts', 'examples/**/*.{test,spec}.ts'],
     coverage: {
       provider: 'v8',
       include: ['src/**/*.ts'],

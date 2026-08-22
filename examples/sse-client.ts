@@ -12,6 +12,8 @@
 // ============================================================================
 
 import crypto from "crypto";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -327,6 +329,15 @@ export class TriologueAgent {
   // Token Rotation
   // -------------------------------------------------------------------------
 
+  /**
+   * Calls POST /byoa/sse/tokens/rotate. As of now that route answers
+   * `501 not_implemented` (see BYOA.md's Token Rotation section): the
+   * gateway has no durable per-token store, so throws
+   * TokenRotationNotSupportedError instead of trying to read a `token`
+   * field out of a body that will not have one. Once the gateway ships
+   * upstream-backed rotation, a plain 200 flows through the path below
+   * unchanged.
+   */
   async rotateToken(): Promise<string> {
     const response = await fetch(
       `${this.config.gatewayUrl}/byoa/sse/tokens/rotate`,
@@ -335,6 +346,10 @@ export class TriologueAgent {
         headers: { Authorization: `Bearer ${this.config.token}` },
       }
     );
+
+    if (response.status === 501) {
+      throw new TokenRotationNotSupportedError();
+    }
 
     if (!response.ok) {
       throw new Error(`Token rotation failed: ${response.status}`);
@@ -355,6 +370,14 @@ export class TriologueAgent {
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
+
+/** Thrown by rotateToken() when the gateway answers 501 for the rotate route. */
+export class TokenRotationNotSupportedError extends Error {
+  constructor() {
+    super("Token rotation not supported by this gateway (501)");
+    this.name = "TokenRotationNotSupportedError";
+  }
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -397,13 +420,25 @@ async function main() {
 
   await agent.connect();
 
-  // Rotate token every 24h. POST /byoa/sse/tokens/rotate mints a new token
-  // immediately and keeps the old one valid for a short grace window (see
-  // BYOA.md's Token Rotation section, src/byoa-sse.ts and src/auth.ts) so
-  // this in-flight disconnect/reconnect cycle doesn't race a hard cutover.
-  setInterval(
+  // Rotate token every 24h, if the gateway supports it. As of now
+  // POST /byoa/sse/tokens/rotate answers 501 (see BYOA.md's Token Rotation
+  // section): the gateway has no durable per-token store, so rotating here
+  // would either bypass Triologue's own revocation or just alias the same
+  // token. On the first 501, log that once and stop polling instead of
+  // logging a fresh error every 24h; a future gateway that does support
+  // rotation flows through the same interval with no changes needed here.
+  const rotationTimer = setInterval(
     () => {
-      agent.rotateToken().catch(console.error);
+      agent.rotateToken().catch((err) => {
+        if (err instanceof TokenRotationNotSupportedError) {
+          console.log(
+            "[Agent] token rotation not supported by this gateway; keeping the configured token"
+          );
+          clearInterval(rotationTimer);
+          return;
+        }
+        console.error(err);
+      });
     },
     24 * 60 * 60 * 1000
   );
@@ -416,4 +451,23 @@ async function main() {
   });
 }
 
-main().catch(console.error);
+/**
+ * Module-is-main entrypoint guard: true only when this file is the process
+ * entrypoint (`npx tsx examples/sse-client.ts`), false when it is imported
+ * (e.g. a test importing TriologueAgent / TokenRotationNotSupportedError).
+ * Compares the resolved real path of process.argv[1] against this module's
+ * own URL so main() (which reads process.env.BYOA_TOKEN! and connects to a
+ * real gateway) never runs as a side effect of import.
+ */
+function isMainModule(): boolean {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
+  main().catch(console.error);
+}

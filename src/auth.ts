@@ -7,15 +7,9 @@
  *
  * On startup: tries API first, falls back to agents.json.
  * Periodic sync: refreshes from API every SYNC_INTERVAL_MS.
- *
- * Token rotation (see rotateToken below) is layered on top of this store,
- * entirely in-memory and independent of the periodic API/file sync. See the
- * comment above rotateToken for why, and BYOA.md's Token Rotation section
- * for the operator-facing limitation this implies.
  */
 
 import fs from 'fs';
-import crypto from 'crypto';
 import type { AgentInfo } from './types.js';
 
 interface AgentConfig {
@@ -40,20 +34,6 @@ const AGENTS_FILE = process.env.AGENTS_CONFIG ?? './agents.json';
 const TRIOLOGUE_URL = process.env.TRIOLOGUE_URL ?? 'http://localhost:4001';
 const GATEWAY_TOKEN = process.env.GATEWAY_TOKEN ?? '';
 const SYNC_INTERVAL_MS = 60_000; // Re-sync from DB every 60s
-
-/**
- * How long a rotated-away token keeps authenticating after POST
- * /byoa/sse/tokens/rotate mints its replacement. Keep this short (Risk note
- * on the rotation task: "keep the grace window short and log rotations").
- * Falls back to the 5-minute default on an unset, non-numeric, or
- * non-positive value.
- */
-function parseGraceMs(): number {
-  const raw = process.env.TOKEN_ROTATE_GRACE_MS;
-  const parsed = raw ? Number(raw) : NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 5 * 60_000;
-}
-export const TOKEN_ROTATE_GRACE_MS = parseGraceMs();
 
 let agents: AgentConfig[] = [];
 let syncInterval: ReturnType<typeof setInterval> | null = null;
@@ -164,103 +144,8 @@ export function buildTokenIndex(): void {
   }
 }
 
-// ── Token rotation (in-memory, layered on top of tokenMap) ──
-//
-// tokenMap above is a read-through mirror of an upstream source (the
-// Triologue DB via syncFromApi, or agents.json) that this gateway does not
-// own — buildTokenIndex() rebuilds it wholesale on every sync and has no
-// notion of "this token was rotated". A real rotation would need the
-// upstream source to also forget the old token and learn the new one, which
-// requires a Triologue API this gateway does not have (see byoa-sse.ts's
-// POST /tokens/rotate handler and BYOA.md's Token Rotation section).
-//
-// Until that exists, rotation state lives only here, in this process's
-// memory, layered in front of tokenMap:
-//   - activeRotatedTokens: newest token in an agent's rotation chain -> agent
-//   - graceTokens: a token that was just rotated away -> {newToken, agent,
-//     expiresAt}; still authenticates until expiresAt
-//   - rotatedAwayTokens: tokens whose grace has fully elapsed; rejected even
-//     if tokenMap (from the next upstream sync) still reports them as valid,
-//     since the upstream source doesn't know this token was ever rotated
-//
-// Limitation (documented, not silently swallowed): none of this survives a
-// process restart, and a periodic upstream resync cannot be told about a
-// rotation performed here — see BYOA.md.
-
-interface GraceTokenEntry {
-  newToken: string;
-  agent: AgentInfo;
-  expiresAt: number; // epoch ms
-}
-
-const activeRotatedTokens = new Map<string, AgentInfo>();
-const graceTokens = new Map<string, GraceTokenEntry>();
-const rotatedAwayTokens = new Set<string>();
-
 export function authenticateToken(token: string): AgentInfo | null {
-  // MUTATION GUARD: dropping this check would let a fully-expired rotated
-  // token authenticate again once the next upstream sync re-adds the
-  // original token to tokenMap below.
-  if (rotatedAwayTokens.has(token)) return null;
-
-  const rotated = activeRotatedTokens.get(token);
-  if (rotated) return rotated;
-
-  const grace = graceTokens.get(token);
-  if (grace) {
-    if (Date.now() < grace.expiresAt) return grace.agent;
-    // Grace window elapsed: stop honoring it, and make sure it can never
-    // authenticate again via tokenMap either.
-    graceTokens.delete(token);
-    rotatedAwayTokens.add(token);
-    return null;
-  }
-
   return tokenMap.get(token) ?? null;
-}
-
-export interface RotateTokenResult {
-  token: string;
-  agent: AgentInfo;
-  oldTokenExpiresAt: number; // epoch ms
-}
-
-/**
- * Rotate the token used to authenticate this request. The presented token
- * must already be valid (checked via authenticateToken); the caller
- * (byoa-sse.ts's authenticateSSE middleware) already enforces this before
- * the route handler runs, so only the token's own owner can ever rotate it.
- *
- * Idempotent within the grace window: if `presentedToken` is itself a token
- * that was already rotated away (and is still inside its grace window),
- * this returns the same {token, oldTokenExpiresAt} as the original
- * rotation instead of minting another link in the chain — a retried
- * rotate() call is safe. Rotating the current (non-grace) token always
- * mints a fresh token and starts a fresh, independent grace window for
- * whichever token was just used; an earlier "old-old" token already in
- * grace keeps its own original expiry untouched by later rotations.
- */
-export function rotateToken(presentedToken: string): RotateTokenResult | null {
-  const agent = authenticateToken(presentedToken);
-  if (!agent) return null;
-
-  const existingGrace = graceTokens.get(presentedToken);
-  if (existingGrace) {
-    return {
-      token: existingGrace.newToken,
-      agent: existingGrace.agent,
-      oldTokenExpiresAt: existingGrace.expiresAt,
-    };
-  }
-
-  const newToken = `byoa_${crypto.randomBytes(24).toString('hex')}`;
-  const expiresAt = Date.now() + TOKEN_ROTATE_GRACE_MS;
-
-  activeRotatedTokens.delete(presentedToken);
-  graceTokens.set(presentedToken, { newToken, agent, expiresAt });
-  activeRotatedTokens.set(newToken, agent);
-
-  return { token: newToken, agent, oldTokenExpiresAt: expiresAt };
 }
 
 export function getAgentByUsername(username: string): AgentInfo | null {

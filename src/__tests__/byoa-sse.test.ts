@@ -2,7 +2,7 @@
  * Tests for src/byoa-sse.ts
  *
  * Mounts sseRouter on an ephemeral express server; mocks ioredis and
- * authenticateToken/rotateToken so no real Redis or auth state is needed.
+ * authenticateToken so no real Redis or auth state is needed.
  *
  * Covers:
  *   - Client registration (hasSSEClient true after GET /stream)
@@ -12,8 +12,9 @@
  *   - shutdownSSE closes all open connections
  *   - GET /status includes mentionKey and receiveMode
  *   - POST /messages sets Retry-After and X-RateLimit-* headers on 429
- *   - POST /tokens/rotate returns 200 with the new token + grace metadata,
- *     and 401 (never calling rotateToken) on missing/invalid/expired auth
+ *   - POST /tokens/rotate: 401 on missing/invalid auth, 501 with a
+ *     documented body for a valid token, and the presented token still
+ *     authenticates afterwards (nothing about it changed)
  *
  * Mutation guard:
  *   M-fanout: break the per-agent target filter in fanout (deliver to all
@@ -22,10 +23,8 @@
  *   → the GET /status test fails.
  *   M-429-headers: stop setting Retry-After/X-RateLimit-* on the 429 path
  *   → the rate-limiting test fails.
- *   M-rotate-auth-order: call rotateToken before authenticateSSE rejects an
- *   invalid/missing token → the "never calling rotateToken" assertions fail.
- *   M-rotate-null: drop the `if (!result)` guard after rotateToken returns
- *   null → the narrow-race 401 test fails or throws.
+ *   M-rotate-auth-order: answer /tokens/rotate before authenticateSSE
+ *   rejects an invalid/missing token → the 401-before-501 tests fail.
  */
 
 import {
@@ -80,15 +79,9 @@ vi.mock('../metrics', () => ({
 }));
 
 const authenticateTokenMock = vi.fn<(token: string) => AgentInfo | null>();
-const rotateTokenMock =
-  vi.fn<
-    (token: string) => { token: string; agent: AgentInfo; oldTokenExpiresAt: number } | null
-  >();
 
 vi.mock('../auth', () => ({
   authenticateToken: (token: string) => authenticateTokenMock(token),
-  rotateToken: (token: string) => rotateTokenMock(token),
-  TOKEN_ROTATE_GRACE_MS: 300_000,
 }));
 
 // ── Import after mocks ─────────────────────────────────────────────────────────
@@ -158,7 +151,6 @@ afterAll(async () => {
 
 beforeEach(() => {
   authenticateTokenMock.mockReset();
-  rotateTokenMock.mockReset();
 });
 
 afterEach(() => {
@@ -523,32 +515,7 @@ describe('rate limiting (429)', () => {
 });
 
 describe('POST /tokens/rotate', () => {
-  it('returns 200 with the new token, agent identity, and grace metadata', async () => {
-    authenticateTokenMock.mockReturnValue(fakeAgent);
-    const oldTokenExpiresAt = Date.now() + 300_000;
-    rotateTokenMock.mockReturnValue({
-      token: 'byoa_new_rotated_token',
-      agent: fakeAgent,
-      oldTokenExpiresAt,
-    });
-
-    const { status, body } = await postJSON('/byoa/sse/tokens/rotate', 'old-token', {});
-
-    expect(status).toBe(200);
-    expect(rotateTokenMock).toHaveBeenCalledWith('old-token');
-    expect(body.token).toBe('byoa_new_rotated_token');
-    expect(body.agent).toEqual({
-      id: fakeAgent.userId,
-      name: fakeAgent.name,
-      username: fakeAgent.username,
-    });
-    expect(body.oldTokenExpiresAt).toBe(new Date(oldTokenExpiresAt).toISOString());
-    // MUTATION GUARD: if the grace-window constant stopped being surfaced
-    // here (or a wrong unit conversion crept in), this fails.
-    expect(body.gracePeriodSeconds).toBe(300);
-  });
-
-  it('returns 401 without ever calling rotateToken when the Authorization header is missing (MUTATION GUARD: auth runs before rotate)', async () => {
+  it('returns 401 without a body when the Authorization header is missing (MUTATION GUARD: auth runs before the 501 answer)', async () => {
     const status = await new Promise<number>((resolve, reject) => {
       const req = http.request(
         { hostname: '127.0.0.1', port, path: '/byoa/sse/tokens/rotate', method: 'POST' },
@@ -558,25 +525,39 @@ describe('POST /tokens/rotate', () => {
       req.end();
     });
     expect(status).toBe(401);
-    expect(rotateTokenMock).not.toHaveBeenCalled();
   });
 
-  it('returns 401 for an invalid token before reaching rotateToken', async () => {
+  it('returns 401 for an invalid token, never reaching the 501 answer', async () => {
     authenticateTokenMock.mockReturnValue(null);
     const { status } = await postJSON('/byoa/sse/tokens/rotate', 'bad-token', {});
     expect(status).toBe(401);
-    expect(rotateTokenMock).not.toHaveBeenCalled();
   });
 
-  it('returns 401 if rotateToken itself rejects the token (narrow expiry race after the auth check)', async () => {
+  it('returns 501 with a documented body for a valid token', async () => {
     authenticateTokenMock.mockReturnValue(fakeAgent);
-    rotateTokenMock.mockReturnValue(null);
 
-    const { status, body } = await postJSON('/byoa/sse/tokens/rotate', 'old-token', {});
+    const { status, body } = await postJSON('/byoa/sse/tokens/rotate', 'valid-token', {});
 
-    // MUTATION GUARD: if the `if (!result)` branch were dropped, this would
-    // throw (reading .token off null) or return 200 with a bogus body.
-    expect(status).toBe(401);
-    expect(body.error).toBeDefined();
+    expect(status).toBe(501);
+    // MUTATION GUARD: if any of these fields are dropped or renamed, this
+    // fails, since callers (examples/sse-client.ts) rely on `error` to
+    // detect "not implemented" and BYOA.md documents these exact field names.
+    expect(body.error).toBe('not_implemented');
+    expect(typeof body.message).toBe('string');
+    expect(body.message.length).toBeGreaterThan(0);
+    expect(body.docs).toBe('BYOA.md#token-rotation');
+  });
+
+  it('leaves the presented token authenticating after the call, rotation changed nothing', async () => {
+    authenticateTokenMock.mockReturnValue(fakeAgent);
+
+    await postJSON('/byoa/sse/tokens/rotate', 'valid-token', {});
+
+    // The route never touches auth state, so a follow-up request with the
+    // same token still authenticates via the unchanged authenticateToken
+    // mock: nothing was rotated, invalidated, or replaced.
+    const { status } = await getJSON('/byoa/sse/status', 'valid-token');
+    expect(status).toBe(200);
+    expect(authenticateTokenMock).toHaveBeenCalledWith('valid-token');
   });
 });
