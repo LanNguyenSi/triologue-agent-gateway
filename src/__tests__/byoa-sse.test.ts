@@ -10,10 +10,16 @@
  *   - fanoutToSSEClient delivers the event to the matching agent only
  *   - Disconnect cleanup (close handler removes the client)
  *   - shutdownSSE closes all open connections
+ *   - GET /status includes mentionKey and receiveMode
+ *   - POST /messages sets Retry-After and X-RateLimit-* headers on 429
  *
  * Mutation guard:
  *   M-fanout: break the per-agent target filter in fanout (deliver to all
  *   instead of matching agentId) → the "NOT to others" assertion fails.
+ *   M-status-fields: drop mentionKey/receiveMode from the /status response
+ *   → the GET /status test fails.
+ *   M-429-headers: stop setting Retry-After/X-RateLimit-* on the 429 path
+ *   → the rate-limiting test fails.
  */
 
 import {
@@ -124,6 +130,9 @@ let port: number;
 
 beforeAll(async () => {
   const app = express();
+  // Mirrors src/index.ts: JSON parser mounted before the SSE router so
+  // req.body is populated for POST /byoa/sse/messages.
+  app.use(express.json());
   app.use('/byoa/sse', sseRouter);
   server = app.listen(0);
   await new Promise<void>((resolve) => server.once('listening', resolve));
@@ -376,5 +385,126 @@ describe('shutdownSSE', () => {
     });
 
     req.destroy();
+  });
+});
+
+// ── GET /status + rate-limit (429) helpers ─────────────────────────────────
+
+function getJSON(
+  path: string,
+  token: string,
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: any }> {
+  return new Promise((resolve, reject) => {
+    http
+      .get(
+        {
+          hostname: '127.0.0.1',
+          port,
+          path,
+          headers: { Authorization: `Bearer ${token}` },
+        },
+        (res) => {
+          let raw = '';
+          res.setEncoding('utf8');
+          res.on('data', (chunk: string) => (raw += chunk));
+          res.on('end', () => {
+            resolve({
+              status: res.statusCode ?? 0,
+              headers: res.headers,
+              body: raw ? JSON.parse(raw) : null,
+            });
+          });
+        },
+      )
+      .on('error', reject);
+  });
+}
+
+function postJSON(
+  path: string,
+  token: string,
+  payload: unknown,
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: any }> {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(payload);
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        path,
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(data),
+        },
+      },
+      (res) => {
+        let raw = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk: string) => (raw += chunk));
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            body: raw ? JSON.parse(raw) : null,
+          });
+        });
+      },
+    );
+    req.on('error', reject);
+    req.end(data);
+  });
+}
+
+describe('GET /status', () => {
+  it('includes mentionKey and receiveMode for a connected agent', async () => {
+    authenticateTokenMock.mockReturnValue(fakeAgent);
+
+    const { status, body } = await getJSON('/byoa/sse/status', 'valid-token');
+
+    expect(status).toBe(200);
+    expect(body.mentionKey).toBe(fakeAgent.mentionKey);
+    expect(body.receiveMode).toBe(fakeAgent.receiveMode);
+  });
+});
+
+describe('rate limiting (429)', () => {
+  it('sets Retry-After and X-RateLimit-* headers once the limit is exceeded', async () => {
+    // Distinct agent/userId so this test's rate-limit bucket is not shared
+    // with any other test in this file.
+    const limitedAgent: AgentInfo = {
+      ...fakeAgent,
+      id: 'user-sse-ratelimit',
+      userId: 'user-sse-ratelimit',
+      trustLevel: 'standard', // 10 requests/min
+    };
+    authenticateTokenMock.mockReturnValue(limitedAgent);
+
+    const payload = { roomId: 'room-1', content: 'hi' };
+
+    // Exhaust the 10/min standard-trust budget. rateLimitMiddleware runs
+    // before the handler's `if (!bridge)` check, so every request is
+    // counted even though no bridge is registered in this test harness
+    // (each one short-circuits to 503, which is fine: only that the rate
+    // limiter counts them matters here).
+    for (let i = 0; i < 10; i++) {
+      await postJSON('/byoa/sse/messages', 'valid-token', payload);
+    }
+
+    const { status, headers, body } = await postJSON(
+      '/byoa/sse/messages',
+      'valid-token',
+      payload,
+    );
+
+    expect(status).toBe(429);
+    expect(body.error).toBe('RATE_LIMITED');
+    expect(typeof body.retryAfter).toBe('number');
+    expect(headers['retry-after']).toBeDefined();
+    expect(Number(headers['retry-after'])).toBeGreaterThan(0);
+    expect(Number(headers['retry-after'])).toBe(body.retryAfter);
+    expect(headers['x-ratelimit-limit']).toBe('10');
+    expect(headers['x-ratelimit-remaining']).toBe('0');
   });
 });

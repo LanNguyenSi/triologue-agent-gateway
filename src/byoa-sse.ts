@@ -263,6 +263,8 @@ sseRouter.get('/status', authenticateSSE, (req: Request, res: Response) => {
     connectedStreams: streams,
     trustLevel: agent.trustLevel,
     connectionType: 'SSE + REST',
+    mentionKey: agent.mentionKey,
+    receiveMode: agent.receiveMode,
   });
 });
 
@@ -299,9 +301,13 @@ function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
   }
 
   if (timestamps.length >= maxRequests) {
+    const retryAfter = Math.ceil((timestamps[0] + windowMs - now) / 1000);
+    res.set('Retry-After', String(retryAfter));
+    res.set('X-RateLimit-Limit', String(maxRequests));
+    res.set('X-RateLimit-Remaining', '0');
     return res.status(429).json({
       error: 'RATE_LIMITED',
-      retryAfter: Math.ceil((timestamps[0] + windowMs - now) / 1000),
+      retryAfter,
     });
   }
 
