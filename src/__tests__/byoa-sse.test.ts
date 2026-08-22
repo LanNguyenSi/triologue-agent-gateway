@@ -2,7 +2,7 @@
  * Tests for src/byoa-sse.ts
  *
  * Mounts sseRouter on an ephemeral express server; mocks ioredis and
- * authenticateToken so no real Redis or auth state is needed.
+ * authenticateToken/rotateToken so no real Redis or auth state is needed.
  *
  * Covers:
  *   - Client registration (hasSSEClient true after GET /stream)
@@ -12,6 +12,8 @@
  *   - shutdownSSE closes all open connections
  *   - GET /status includes mentionKey and receiveMode
  *   - POST /messages sets Retry-After and X-RateLimit-* headers on 429
+ *   - POST /tokens/rotate returns 200 with the new token + grace metadata,
+ *     and 401 (never calling rotateToken) on missing/invalid/expired auth
  *
  * Mutation guard:
  *   M-fanout: break the per-agent target filter in fanout (deliver to all
@@ -20,6 +22,10 @@
  *   → the GET /status test fails.
  *   M-429-headers: stop setting Retry-After/X-RateLimit-* on the 429 path
  *   → the rate-limiting test fails.
+ *   M-rotate-auth-order: call rotateToken before authenticateSSE rejects an
+ *   invalid/missing token → the "never calling rotateToken" assertions fail.
+ *   M-rotate-null: drop the `if (!result)` guard after rotateToken returns
+ *   null → the narrow-race 401 test fails or throws.
  */
 
 import {
@@ -74,9 +80,15 @@ vi.mock('../metrics', () => ({
 }));
 
 const authenticateTokenMock = vi.fn<(token: string) => AgentInfo | null>();
+const rotateTokenMock =
+  vi.fn<
+    (token: string) => { token: string; agent: AgentInfo; oldTokenExpiresAt: number } | null
+  >();
 
 vi.mock('../auth', () => ({
   authenticateToken: (token: string) => authenticateTokenMock(token),
+  rotateToken: (token: string) => rotateTokenMock(token),
+  TOKEN_ROTATE_GRACE_MS: 300_000,
 }));
 
 // ── Import after mocks ─────────────────────────────────────────────────────────
@@ -146,6 +158,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   authenticateTokenMock.mockReset();
+  rotateTokenMock.mockReset();
 });
 
 afterEach(() => {
@@ -506,5 +519,64 @@ describe('rate limiting (429)', () => {
     expect(Number(headers['retry-after'])).toBe(body.retryAfter);
     expect(headers['x-ratelimit-limit']).toBe('10');
     expect(headers['x-ratelimit-remaining']).toBe('0');
+  });
+});
+
+describe('POST /tokens/rotate', () => {
+  it('returns 200 with the new token, agent identity, and grace metadata', async () => {
+    authenticateTokenMock.mockReturnValue(fakeAgent);
+    const oldTokenExpiresAt = Date.now() + 300_000;
+    rotateTokenMock.mockReturnValue({
+      token: 'byoa_new_rotated_token',
+      agent: fakeAgent,
+      oldTokenExpiresAt,
+    });
+
+    const { status, body } = await postJSON('/byoa/sse/tokens/rotate', 'old-token', {});
+
+    expect(status).toBe(200);
+    expect(rotateTokenMock).toHaveBeenCalledWith('old-token');
+    expect(body.token).toBe('byoa_new_rotated_token');
+    expect(body.agent).toEqual({
+      id: fakeAgent.userId,
+      name: fakeAgent.name,
+      username: fakeAgent.username,
+    });
+    expect(body.oldTokenExpiresAt).toBe(new Date(oldTokenExpiresAt).toISOString());
+    // MUTATION GUARD: if the grace-window constant stopped being surfaced
+    // here (or a wrong unit conversion crept in), this fails.
+    expect(body.gracePeriodSeconds).toBe(300);
+  });
+
+  it('returns 401 without ever calling rotateToken when the Authorization header is missing (MUTATION GUARD: auth runs before rotate)', async () => {
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = http.request(
+        { hostname: '127.0.0.1', port, path: '/byoa/sse/tokens/rotate', method: 'POST' },
+        (res) => resolve(res.statusCode ?? 0),
+      );
+      req.on('error', reject);
+      req.end();
+    });
+    expect(status).toBe(401);
+    expect(rotateTokenMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 for an invalid token before reaching rotateToken', async () => {
+    authenticateTokenMock.mockReturnValue(null);
+    const { status } = await postJSON('/byoa/sse/tokens/rotate', 'bad-token', {});
+    expect(status).toBe(401);
+    expect(rotateTokenMock).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 if rotateToken itself rejects the token (narrow expiry race after the auth check)', async () => {
+    authenticateTokenMock.mockReturnValue(fakeAgent);
+    rotateTokenMock.mockReturnValue(null);
+
+    const { status, body } = await postJSON('/byoa/sse/tokens/rotate', 'old-token', {});
+
+    // MUTATION GUARD: if the `if (!result)` branch were dropped, this would
+    // throw (reading .token off null) or return 200 with a bogus body.
+    expect(status).toBe(401);
+    expect(body.error).toBeDefined();
   });
 });

@@ -397,11 +397,10 @@ async function main() {
 
   await agent.connect();
 
-  // Rotate token every 24h. The gateway's /byoa/sse/tokens/rotate route
-  // currently returns 501 NOT_IMPLEMENTED (no Triologue API to update the
-  // token in the DB yet, see src/byoa-sse.ts), so this will log an error
-  // on each tick until that lands. Left in place so real rotation starts
-  // working automatically once the route ships.
+  // Rotate token every 24h. POST /byoa/sse/tokens/rotate mints a new token
+  // immediately and keeps the old one valid for a short grace window (see
+  // BYOA.md's Token Rotation section, src/byoa-sse.ts and src/auth.ts) so
+  // this in-flight disconnect/reconnect cycle doesn't race a hard cutover.
   setInterval(
     () => {
       agent.rotateToken().catch(console.error);

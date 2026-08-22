@@ -20,7 +20,7 @@ import type { AgentInfo } from './types.js';
 import type { TriologueBridge } from './triologue-bridge.js';
 
 // Use existing auth system
-import { authenticateToken } from './auth.js';
+import { authenticateToken, rotateToken, TOKEN_ROTATE_GRACE_MS } from './auth.js';
 
 // ── Bridge reference (injected from index.ts) ──
 let bridge: TriologueBridge | null = null;
@@ -240,15 +240,36 @@ sseRouter.post('/messages', authenticateSSE, rateLimitMiddleware, async (req: Re
 });
 
 // ── 3) Token Rotation ──
-// Requires Triologue server-side support (not yet implemented).
-// When available: generate new token in DB, invalidate old, disconnect SSE streams.
+// Gateway-local rotation: mints a new token immediately and keeps the
+// presented token valid for a short grace window (TOKEN_ROTATE_GRACE_MS,
+// see auth.ts) so an in-flight caller isn't cut off mid-rotation. This
+// state lives only in this gateway process's memory — it does not (and,
+// without a Triologue API to update the token in its own DB, cannot yet)
+// propagate to Triologue itself. See BYOA.md's Token Rotation section for
+// what that means in practice.
 
 sseRouter.post('/tokens/rotate', authenticateSSE, async (req: Request, res: Response) => {
-  // Token rotation requires a Triologue API endpoint to update the token in the database.
-  // This is not yet available — return 501 instead of a fake response.
-  res.status(501).json({
-    error: 'NOT_IMPLEMENTED',
-    message: 'Token rotation requires Triologue server support. Contact an admin to manually regenerate your token.',
+  const agent: AgentInfo = (req as any).agent;
+  const token: string = (req as any).token;
+
+  const result = rotateToken(token);
+  if (!result) {
+    // authenticateSSE already validated `token` before this handler ran, so
+    // this only fires if the token expired out of its grace window in the
+    // narrow race between that check and here.
+    metrics.recordAuthFailure('SSE: Token rotation on an invalid/expired token');
+    return res.status(401).json({ error: 'Invalid or inactive token' });
+  }
+
+  console.log(
+    `🔄 [SSE] ${agent.emoji} ${agent.name} rotated their token (old token valid until ${new Date(result.oldTokenExpiresAt).toISOString()})`
+  );
+
+  res.status(200).json({
+    token: result.token,
+    agent: { id: agent.userId, name: agent.name, username: agent.username },
+    oldTokenExpiresAt: new Date(result.oldTokenExpiresAt).toISOString(),
+    gracePeriodSeconds: Math.round(TOKEN_ROTATE_GRACE_MS / 1000),
   });
 });
 

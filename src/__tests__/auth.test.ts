@@ -2,7 +2,10 @@
  * Tests for src/auth.ts
  *
  * Covers: buildTokenIndex, authenticateToken, getWebhookAgents,
- * getAgentByUsername, syncFromApi (malformed data rejection).
+ * getAgentByUsername, syncFromApi (malformed data rejection), rotateToken
+ * (new-token mint, grace-window expiry, permanent post-grace block even
+ * against a re-synced upstream, idempotent replay, and a two-hop rotation
+ * chain).
  * Mutation guards are listed inline at each critical branch.
  */
 
@@ -39,6 +42,8 @@ import {
   syncFromApi,
   loadAgents,
   buildTokenIndex,
+  rotateToken,
+  TOKEN_ROTATE_GRACE_MS,
 } from '../auth.js';
 
 // ── State reset helpers ──────────────────────────────────────────────────────
@@ -368,6 +373,138 @@ describe('loadAgents', () => {
       expect(authenticateToken('byoa_from_file')).not.toBeNull();
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── rotateToken / authenticateToken grace window ─────────────────────────────
+
+describe('rotateToken', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('returns null for a token that was never valid', async () => {
+    await clearAgents();
+    expect(rotateToken('byoa_rot_unknown')).toBeNull();
+  });
+
+  it('mints a new token that authenticates, while the old token also still authenticates immediately after rotation', async () => {
+    await seedAgents([makeRawAgent({ token: 'byoa_rot_basic', userId: 'user-rot-basic' })]);
+
+    const result = rotateToken('byoa_rot_basic');
+    expect(result).not.toBeNull();
+    expect(result!.token).not.toBe('byoa_rot_basic');
+    expect(result!.agent.userId).toBe('user-rot-basic');
+
+    // New token valid immediately.
+    expect(authenticateToken(result!.token)!.userId).toBe('user-rot-basic');
+    // Old token still valid — inside the grace window.
+    expect(authenticateToken('byoa_rot_basic')!.userId).toBe('user-rot-basic');
+  });
+
+  it('rejects the old token once the grace window elapses, new token stays valid (MUTATION GUARD: grace expiry)', async () => {
+    vi.useFakeTimers();
+    try {
+      await seedAgents([makeRawAgent({ token: 'byoa_rot_grace', userId: 'user-rot-grace' })]);
+
+      const result = rotateToken('byoa_rot_grace')!;
+      expect(result).not.toBeNull();
+
+      // Still inside the grace window: old token authenticates.
+      vi.advanceTimersByTime(TOKEN_ROTATE_GRACE_MS - 1);
+      expect(authenticateToken('byoa_rot_grace')).not.toBeNull();
+
+      // Grace window has now elapsed: old token is rejected.
+      vi.advanceTimersByTime(2);
+      // MUTATION GUARD: if the `Date.now() < grace.expiresAt` check is
+      // flipped or removed, this stays non-null and the test fails.
+      expect(authenticateToken('byoa_rot_grace')).toBeNull();
+
+      // New token remains valid throughout.
+      expect(authenticateToken(result.token)).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('permanently blocks a rotated-away token even if the upstream sync re-adds it (MUTATION GUARD: rotatedAwayTokens)', async () => {
+    vi.useFakeTimers();
+    try {
+      await seedAgents([makeRawAgent({ token: 'byoa_rot_perm', userId: 'user-rot-perm' })]);
+      rotateToken('byoa_rot_perm');
+
+      vi.advanceTimersByTime(TOKEN_ROTATE_GRACE_MS + 1);
+      expect(authenticateToken('byoa_rot_perm')).toBeNull();
+
+      // Simulate the next periodic upstream resync bringing the same
+      // (now rotated-away) token back into tokenMap, as it would if
+      // Triologue's own DB still considers it the agent's current token.
+      await seedAgents([makeRawAgent({ token: 'byoa_rot_perm', userId: 'user-rot-perm' })]);
+
+      // MUTATION GUARD: without the rotatedAwayTokens block, this would
+      // fall through to tokenMap.get() and authenticate again.
+      expect(authenticateToken('byoa_rot_perm')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('is idempotent within the grace window: rotating an already-rotated-away (but still-grace) token returns the same new token', async () => {
+    vi.useFakeTimers();
+    try {
+      await seedAgents([makeRawAgent({ token: 'byoa_rot_idem', userId: 'user-rot-idem' })]);
+
+      const first = rotateToken('byoa_rot_idem')!;
+      vi.advanceTimersByTime(1000);
+      const second = rotateToken('byoa_rot_idem')!;
+
+      // MUTATION GUARD: if idempotent replay were removed, `second.token`
+      // would differ from `first.token` and `oldTokenExpiresAt` would be
+      // pushed forward instead of staying put.
+      expect(second.token).toBe(first.token);
+      expect(second.oldTokenExpiresAt).toBe(first.oldTokenExpiresAt);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('handles a rotation chain correctly: an old-old token stays valid until its own original grace elapses, unaffected by a later rotation', async () => {
+    vi.useFakeTimers();
+    try {
+      await seedAgents([makeRawAgent({ token: 'byoa_rot_chain_a', userId: 'user-rot-chain' })]);
+
+      // Rotate A -> B.
+      const first = rotateToken('byoa_rot_chain_a')!;
+      const tokenB = first.token;
+
+      // Advance partway into A's grace window, then rotate B -> C using the
+      // *current* token (not A), which is a fresh rotation with its own
+      // fresh grace window for B.
+      vi.advanceTimersByTime(TOKEN_ROTATE_GRACE_MS / 2);
+      const second = rotateToken(tokenB)!;
+      const tokenC = second.token;
+
+      // All three should currently authenticate: A and B are both within
+      // their own (independent) grace windows, C is the active token.
+      expect(authenticateToken('byoa_rot_chain_a')).not.toBeNull();
+      expect(authenticateToken(tokenB)).not.toBeNull();
+      expect(authenticateToken(tokenC)).not.toBeNull();
+
+      // Advance past A's original grace window (elapsed at
+      // TOKEN_ROTATE_GRACE_MS from rotation of A, i.e. GRACE_MS/2 more from
+      // here) but not yet past B's (whose grace started at GRACE_MS/2 and
+      // extends to GRACE_MS/2 + TOKEN_ROTATE_GRACE_MS).
+      vi.advanceTimersByTime(TOKEN_ROTATE_GRACE_MS / 2 + 1);
+
+      // Old-old token A: invalid now that its own grace has elapsed.
+      expect(authenticateToken('byoa_rot_chain_a')).toBeNull();
+      // B: still inside its own, later-starting grace window.
+      expect(authenticateToken(tokenB)).not.toBeNull();
+      // C: the active token, always valid.
+      expect(authenticateToken(tokenC)).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
     }
   });
 });
