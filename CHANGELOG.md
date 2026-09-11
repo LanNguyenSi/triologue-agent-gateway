@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Bumped `pytest` to 9.0.3 in `requirements-test.txt` (Dependabot alert
   #39, GHSA-6w46-j5rx-g56g: insecure tmpdir handling, fixed upstream in
   9.0.3). The Python test suite passes unchanged under 9.0.3.
+- Bumped `hono` to 4.13.7 (root, transitive via `@modelcontextprotocol/sdk`):
+  GHSA-gqvv-2mrq-wpjv, GHSA-g6gw-c38x-mqfc, GHSA-crvj-82cr-hjcx.
+- Bumped `vitest`/`@vitest/mocker` to 4.1.11 in root, `bridge` and `sdk`
+  (GHSA-82fw-gwwq-j7x9: path traversal / arbitrary file read via
+  `@vitest/mocker` redirect mock).
 
 ## [0.2.3] - 2026-08-20
 
