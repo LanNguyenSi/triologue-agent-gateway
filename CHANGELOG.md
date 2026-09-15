@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- deps: drop the qs override now that express 4.22.3 / body-parser 1.20.8 declare ~6.16.0; `qs` stays at 6.16.0, only its resolution path changes. Lockfile: express 4.22.2 to 4.22.3 (its only behavioural addition is conditional revalidation for QUERY requests in `req.fresh`), body-parser 1.20.6 to 1.20.8 (qs range only).
 - `POST /byoa/sse/tokens/rotate` still returns `501`, now with a documented
   JSON body (`error`, `message`, `docs` fields) explaining why: the gateway
   has no durable per-token store, so a gateway-local rotation would either
