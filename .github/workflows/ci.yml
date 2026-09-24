@@ -124,10 +124,12 @@ jobs:
           LOG="$(mktemp)"
           trap 'rm -f "$LOG"' EXIT
 
-          # GitHub Actions runs `run:` steps as `bash -eo pipefail`;
-          # without this guard, `set -e` would kill the script right at
-          # this pipeline on any non-zero exit (findings, outage, or a
-          # timeout alike), before the classification below ever runs.
+          # GitHub Actions runs `run:` steps as `bash -e`; without this
+          # guard, `set -e` would kill the script right at this pipeline
+          # on any non-zero exit (findings, outage, or a timeout alike),
+          # before the classification below ever runs. The script sets
+          # pipefail itself above, since the step carries no `shell:`
+          # key.
           set +e
           timeout "${AUDIT_TIMEOUT_SECS}s" npm audit --audit-level=high --no-fund 2>&1 | tee "$LOG"
           STATUS=$?
@@ -261,10 +263,12 @@ jobs:
           LOG="$(mktemp)"
           trap 'rm -f "$LOG"' EXIT
 
-          # GitHub Actions runs `run:` steps as `bash -eo pipefail`;
-          # without this guard, `set -e` would kill the script right at
-          # this pipeline on any non-zero exit (findings, outage, or a
-          # timeout alike), before the classification below ever runs.
+          # GitHub Actions runs `run:` steps as `bash -e`; without this
+          # guard, `set -e` would kill the script right at this pipeline
+          # on any non-zero exit (findings, outage, or a timeout alike),
+          # before the classification below ever runs. The script sets
+          # pipefail itself above, since the step carries no `shell:`
+          # key.
           set +e
           timeout "${AUDIT_TIMEOUT_SECS}s" npm audit --audit-level=high --no-fund 2>&1 | tee "$LOG"
           STATUS=$?
@@ -350,10 +354,12 @@ jobs:
           LOG="$(mktemp)"
           trap 'rm -f "$LOG"' EXIT
 
-          # GitHub Actions runs `run:` steps as `bash -eo pipefail`;
-          # without this guard, `set -e` would kill the script right at
-          # this pipeline on any non-zero exit (findings, outage, or a
-          # timeout alike), before the classification below ever runs.
+          # GitHub Actions runs `run:` steps as `bash -e`; without this
+          # guard, `set -e` would kill the script right at this pipeline
+          # on any non-zero exit (findings, outage, or a timeout alike),
+          # before the classification below ever runs. The script sets
+          # pipefail itself above, since the step carries no `shell:`
+          # key.
           set +e
           timeout "${AUDIT_TIMEOUT_SECS}s" npm audit --audit-level=high --no-fund 2>&1 | tee "$LOG"
           STATUS=$?
