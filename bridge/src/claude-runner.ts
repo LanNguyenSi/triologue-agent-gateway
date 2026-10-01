@@ -39,7 +39,10 @@ import type { IncomingMessage, AgentIdentity } from './mention.js';
  *
  * Late-output semantics: once this grace elapses, stdout/stderr are
  * destroyed and the result carries only the chunks collected so far.
- * Anything the grandchild writes after that point is dropped.
+ * Anything the grandchild writes after that point is dropped. Because
+ * the read end is destroyed, a grandchild that is still writing gets
+ * SIGPIPE (EPIPE if it ignores SIGPIPE), so its output is dropped and it
+ * may be terminated.
  */
 export const STDIO_DRAIN_GRACE_MS = 2_000;
 
@@ -219,11 +222,12 @@ export async function runClaude(
     let exitCodeFromExit: number | null = null;
     // Assigned by the drain logic below, before any 'exit' can fire.
     let armDrain!: () => void;
-    child.once('exit', (code: number | null) => {
+    const onExit = (code: number | null): void => {
       exited = true;
       exitCodeFromExit = code;
       armDrain();
-    });
+    };
+    child.once('exit', onExit);
     let killTimer: NodeJS.Timeout | null = null;
     const softTimer = setTimeout(() => {
       timedOut = true;
@@ -245,13 +249,15 @@ export async function runClaude(
     // a child that was never spawned.
     let exitCode: number;
     let drainTimer: NodeJS.Timeout | null = null;
+    // Assigned synchronously by the promise executor below.
+    let onClose!: (code: number | null) => void;
     // Settle on 'close' (pipes drained) or, after 'exit', when the drain
     // grace elapses, whichever comes first. The exit code from 'close'
     // wins when it fired; otherwise the one from 'exit' is used.
     try {
       exitCode = await new Promise<number>((resolve, reject) => {
         const onError = (err: Error): void => reject(err);
-        const onClose = (code: number | null): void => resolve(code ?? 0);
+        onClose = (code: number | null): void => resolve(code ?? 0);
         armDrain = () => {
           drainTimer = setTimeout(() => {
             // See STDIO_DRAIN_GRACE_MS: late output is dropped.
@@ -271,12 +277,13 @@ export async function runClaude(
       clearTimeout(softTimer);
       if (killTimer) clearTimeout(killTimer);
       if (drainTimer) clearTimeout(drainTimer);
-      // Drop the listeners so nothing fires or collects after settle.
+      // Drop runClaude's own listeners (and only those) so nothing fires
+      // or collects after settle.
       // The 'error' listener stays attached on purpose: a late 'error'
       // event with no listener would throw, while rejecting a settled
       // promise is a no-op.
-      child.removeAllListeners('exit');
-      child.removeAllListeners('close');
+      child.off('exit', onExit);
+      child.off('close', onClose);
       child.stdout.off('data', onStdout);
       child.stderr.off('data', onStderr);
     }

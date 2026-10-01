@@ -34,8 +34,8 @@ export default defineConfig({
       // / lines 100 - both sides of the killTimer's `if (!exited)` guard
       // (escalate vs. suppress) are now exercised by fake-timer tests; the
       // remaining function-coverage gap is the no-op `.catch(() => {})`
-      // callback on the `finally` block's temp-dir `rm()` cleanup (line
-      // 228), unrelated to the killTimer guard.
+      // callback on the `finally` block's temp-dir `rm().catch` cleanup,
+      // unrelated to the killTimer guard.
       thresholds: {
         statements: 59,
         branches: 65,

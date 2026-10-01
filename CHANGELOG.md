@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   @mention). It now settles on 'close' or 'exit' plus a 2000 ms drain grace
   (`STDIO_DRAIN_GRACE_MS`), whichever comes first; on grace expiry the pipes are
   destroyed and the result carries the output collected so far, so late output
-  is dropped.
+  is dropped. A grandchild still writing after the grace gets SIGPIPE/EPIPE
+  (its output is dropped and it may be terminated). The exit and close
+  handlers are now removed individually instead of via `removeAllListeners`.
 
 ### Changed
 
