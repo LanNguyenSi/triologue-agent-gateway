@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
+- Bumped `axios` (direct root dependency) from 1.18.0 to 1.20.0, closing the
+  advisories published 2026-09-30 against axios < 1.20.0 (1.x lower bounds
+  from 1.0.0; for example GHSA-r4gj-5m52-g5wh); the lockfile also records axios's raised
+  `form-data` range (^4.0.6, already resolved).
 - Bumped `pytest` to 9.0.3 in `requirements-test.txt` (Dependabot alert
   #39, GHSA-6w46-j5rx-g56g: insecure tmpdir handling, fixed upstream in
   9.0.3). The Python test suite passes unchanged under 9.0.3.
