@@ -217,12 +217,12 @@ export async function runClaude(
     // 'exit' event instead.
     let exited = false;
     let exitCodeFromExit: number | null = null;
-    // Set by the drain logic below; invoked from the 'exit' listener.
-    let onExited: (() => void) | null = null;
+    // Assigned by the drain logic below, before any 'exit' can fire.
+    let armDrain!: () => void;
     child.once('exit', (code: number | null) => {
       exited = true;
       exitCodeFromExit = code;
-      onExited?.();
+      armDrain();
     });
     let killTimer: NodeJS.Timeout | null = null;
     const softTimer = setTimeout(() => {
@@ -248,12 +248,11 @@ export async function runClaude(
     // Settle on 'close' (pipes drained) or, after 'exit', when the drain
     // grace elapses, whichever comes first. The exit code from 'close'
     // wins when it fired; otherwise the one from 'exit' is used.
-    let detach: () => void = () => {};
     try {
       exitCode = await new Promise<number>((resolve, reject) => {
         const onError = (err: Error): void => reject(err);
         const onClose = (code: number | null): void => resolve(code ?? 0);
-        onExited = () => {
+        armDrain = () => {
           drainTimer = setTimeout(() => {
             // See STDIO_DRAIN_GRACE_MS: late output is dropped.
             child.stdout.destroy();
@@ -261,14 +260,6 @@ export async function runClaude(
             resolve(exitCodeFromExit ?? 0);
           }, STDIO_DRAIN_GRACE_MS);
           drainTimer.unref();
-        };
-        // The 'error' listener stays attached on purpose: a late 'error'
-        // event with no listener would throw; rejecting a settled promise
-        // is a no-op.
-        detach = () => {
-          child.off('close', onClose);
-          child.stdout.off('data', onStdout);
-          child.stderr.off('data', onStderr);
         };
         child.once('error', onError);
         child.once('close', onClose);
@@ -280,8 +271,14 @@ export async function runClaude(
       clearTimeout(softTimer);
       if (killTimer) clearTimeout(killTimer);
       if (drainTimer) clearTimeout(drainTimer);
-      onExited = null;
-      detach();
+      // Drop the listeners so nothing fires or collects after settle.
+      // The 'error' listener stays attached on purpose: a late 'error'
+      // event with no listener would throw, while rejecting a settled
+      // promise is a no-op.
+      child.removeAllListeners('exit');
+      child.removeAllListeners('close');
+      child.stdout.off('data', onStdout);
+      child.stderr.off('data', onStderr);
     }
 
     return {
