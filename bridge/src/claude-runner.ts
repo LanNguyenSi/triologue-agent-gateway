@@ -25,6 +25,27 @@ import { join } from 'node:path';
 import type { BridgeConfig } from './config.js';
 import type { IncomingMessage, AgentIdentity } from './mention.js';
 
+/**
+ * How long runClaude keeps waiting for the stdio pipes to drain after
+ * the child's 'exit' event, before it settles without waiting for
+ * 'close'.
+ *
+ * 'close' only fires once every stdio pipe is closed. A detached
+ * grandchild that inherited stdout/stderr keeps them open after the
+ * claude child is gone, so waiting for 'close' alone can stall for the
+ * grandchild's whole lifetime, and bridge/src/index.ts awaits this run
+ * inside a serialized queue, so one such run would block every later
+ * @mention.
+ *
+ * Late-output semantics: once this grace elapses, stdout/stderr are
+ * destroyed and the result carries only the chunks collected so far.
+ * Anything the grandchild writes after that point is dropped. Because
+ * the read end is destroyed, a grandchild that is still writing gets
+ * SIGPIPE (EPIPE if it ignores SIGPIPE), so its output is dropped and it
+ * may be terminated.
+ */
+export const STDIO_DRAIN_GRACE_MS = 2_000;
+
 export interface RunRequest {
   message: IncomingMessage;
   agent: AgentIdentity;
@@ -180,8 +201,14 @@ export async function runClaude(
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];
-    child.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
-    child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+    const onStdout = (chunk: Buffer): void => {
+      stdoutChunks.push(chunk);
+    };
+    const onStderr = (chunk: Buffer): void => {
+      stderrChunks.push(chunk);
+    };
+    child.stdout.on('data', onStdout);
+    child.stderr.on('data', onStderr);
 
     let timedOut = false;
     // `child.killed` is NOT a liveness check: Node flips it to true as
@@ -192,9 +219,15 @@ export async function runClaude(
     // would never escalate. Track real termination via the child's own
     // 'exit' event instead.
     let exited = false;
-    child.once('exit', () => {
+    let exitCodeFromExit: number | null = null;
+    // Assigned by the drain logic below, before any 'exit' can fire.
+    let armDrain!: () => void;
+    const onExit = (code: number | null): void => {
       exited = true;
-    });
+      exitCodeFromExit = code;
+      armDrain();
+    };
+    child.once('exit', onExit);
     let killTimer: NodeJS.Timeout | null = null;
     const softTimer = setTimeout(() => {
       timedOut = true;
@@ -215,14 +248,44 @@ export async function runClaude(
     // 'close' ever fires) doesn't leave softTimer/killTimer armed against
     // a child that was never spawned.
     let exitCode: number;
+    let drainTimer: NodeJS.Timeout | null = null;
+    // Assigned synchronously by the promise executor below.
+    let onClose!: (code: number | null) => void;
+    // Settle on 'close' (pipes drained) or, after 'exit', when the drain
+    // grace elapses, whichever comes first. The exit code from 'close'
+    // wins when it fired; otherwise the one from 'exit' is used.
     try {
-      exitCode = await new Promise((resolve, reject) => {
-        child.once('error', reject);
-        child.once('close', (code) => resolve(code ?? 0));
+      exitCode = await new Promise<number>((resolve, reject) => {
+        const onError = (err: Error): void => reject(err);
+        onClose = (code: number | null): void => resolve(code ?? 0);
+        armDrain = () => {
+          drainTimer = setTimeout(() => {
+            // See STDIO_DRAIN_GRACE_MS: late output is dropped.
+            child.stdout.destroy();
+            child.stderr.destroy();
+            resolve(exitCodeFromExit ?? 0);
+          }, STDIO_DRAIN_GRACE_MS);
+          drainTimer.unref();
+        };
+        child.once('error', onError);
+        child.once('close', onClose);
+        // A child that already exited before this executor ran cannot
+        // happen (listeners attach synchronously after spawn), so no
+        // replay of 'exit' is needed.
       });
     } finally {
       clearTimeout(softTimer);
       if (killTimer) clearTimeout(killTimer);
+      if (drainTimer) clearTimeout(drainTimer);
+      // Drop runClaude's own listeners (and only those) so nothing fires
+      // or collects after settle.
+      // The 'error' listener stays attached on purpose: a late 'error'
+      // event with no listener would throw, while rejecting a settled
+      // promise is a no-op.
+      child.off('exit', onExit);
+      child.off('close', onClose);
+      child.stdout.off('data', onStdout);
+      child.stderr.off('data', onStderr);
     }
 
     return {

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- bridge: `runClaude` no longer waits unboundedly for stdio 'close' after the
+  claude child exits. A detached grandchild holding stdout/stderr open used to
+  stall the run (and, through the serialized work queue, every later
+  @mention). It now settles on 'close' or 'exit' plus a 2000 ms drain grace
+  (`STDIO_DRAIN_GRACE_MS`), whichever comes first; on grace expiry the pipes are
+  destroyed and the result carries the output collected so far, so late output
+  is dropped. A grandchild still writing after the grace gets SIGPIPE/EPIPE
+  (its output is dropped and it may be terminated). The exit and close
+  handlers are now removed individually instead of via `removeAllListeners`.
+
 ### Changed
 
 - deps: drop the qs override now that express 4.22.3 / body-parser 1.20.8 declare ~6.16.0; `qs` stays at 6.16.0, only its resolution path changes. Lockfile: express 4.22.2 to 4.22.3 (its only behavioural addition is conditional revalidation for QUERY requests in `req.fresh`), body-parser 1.20.6 to 1.20.8 (qs range only).

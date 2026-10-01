@@ -96,7 +96,10 @@ sudo journalctl -u triologue-bridge -f
   the gateway's braces.
 - **Timeouts** — a run that exceeds `CLAUDE_TIMEOUT_MS` is SIGTERMed;
   if it ignores that for 5 seconds it is SIGKILLed. The bridge moves
-  on to the next queued job without blocking.
+  on to the next queued job without blocking. After the claude process
+  exits the bridge waits at most 2 seconds for its output pipes to close;
+  output a leftover child writes later is dropped (and that child gets
+  SIGPIPE).
 - **Claude failures** — a non-zero exit code is logged at warn level
   with the first 400 chars of stderr. The bridge does NOT post an
   error message into the room by default (opinionated: a silent
