@@ -37,7 +37,7 @@ vi.mock('node:fs/promises', () => fsMocks);
 const spawnMock = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ spawn: spawnMock }));
 
-const { buildMcpConfig, buildPrompt, runClaude, STDIO_DRAIN_GRACE_MS } = await import('../src/claude-runner.js');
+const { buildMcpConfig, buildPrompt, runClaude } = await import('../src/claude-runner.js');
 
 // ── Mock child process ───────────────────────────────────────────────────────
 
@@ -486,6 +486,10 @@ describe('runClaude - failure paths', () => {
 });
 
 describe('runClaude - bounded stdio drain after exit', () => {
+  // Pinned literal (the documented 2000 ms default), deliberately not
+  // imported from the source, so lengthening the production bound fails.
+  const DRAIN_GRACE_MS = 2000;
+
   it('resolves within the drain grace when exit fires but close is held back by a pipe-holding grandchild', async () => {
     vi.useFakeTimers();
     try {
@@ -504,14 +508,14 @@ describe('runClaude - bounded stdio drain after exit', () => {
       mockChild.emit('exit', 7);
       // 'close' never fires: a detached grandchild still holds the pipes.
 
-      await vi.advanceTimersByTimeAsync(STDIO_DRAIN_GRACE_MS - 1);
+      await vi.advanceTimersByTimeAsync(DRAIN_GRACE_MS - 1);
       expect(settledAt).toBeNull();
       await vi.advanceTimersByTimeAsync(1);
       const result = await resultPromise;
 
       // MUTATION GUARD M10: settle only on 'close' (or lengthen the
       // grace) -> the promise is still pending here and this fails.
-      expect(settledAt).toBe(STDIO_DRAIN_GRACE_MS);
+      expect(settledAt).toBe(DRAIN_GRACE_MS);
       expect(result.exitCode).toBe(7);
       expect(result.stdout).toBe('partial out');
       expect(result.stderr).toBe('partial err');
