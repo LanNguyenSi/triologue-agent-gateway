@@ -15,6 +15,8 @@
  *   M6: runClaude stops cleaning up the temp dir (finally block)
  *   M7: mcp.json is no longer written with mode 0o600
  *   M8: runClaude stops escalating to SIGKILL after the 5s killTimer
+ *   M10: runClaude stops bounding the stdio drain after 'exit' (settles
+ *        only on 'close', or the grace is lengthened)
  *   M9: runClaude stops suppressing SIGKILL once the child has actually
  *       exited (the `exited === true` branch of the `if (!exited)` guard)
  */
@@ -35,13 +37,17 @@ vi.mock('node:fs/promises', () => fsMocks);
 const spawnMock = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ spawn: spawnMock }));
 
-const { buildMcpConfig, buildPrompt, runClaude } = await import('../src/claude-runner.js');
+const { buildMcpConfig, buildPrompt, runClaude, STDIO_DRAIN_GRACE_MS } = await import('../src/claude-runner.js');
 
 // ── Mock child process ───────────────────────────────────────────────────────
 
+class MockStream extends EventEmitter {
+  destroy = vi.fn();
+}
+
 class MockChildProcess extends EventEmitter {
-  stdout = new EventEmitter();
-  stderr = new EventEmitter();
+  stdout = new MockStream();
+  stderr = new MockStream();
   killed = false;
   kill = vi.fn((_signal?: string) => {
     this.killed = true;
@@ -473,6 +479,75 @@ describe('runClaude - failure paths', () => {
       mockChild.emit('close', null);
       const result = await resultPromise;
       expect(result.timedOut).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('runClaude - bounded stdio drain after exit', () => {
+  it('resolves within the drain grace when exit fires but close is held back by a pipe-holding grandchild', async () => {
+    vi.useFakeTimers();
+    try {
+      const mockChild = new MockChildProcess();
+      spawnMock.mockReturnValue(mockChild);
+      const resultPromise = runClaude(makeCfg(), { message: makeMessage(), agent });
+      let settledAt: number | null = null;
+      const t0 = Date.now();
+      void resultPromise.then(() => {
+        settledAt = Date.now() - t0;
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      mockChild.stdout.emit('data', Buffer.from('partial out'));
+      mockChild.stderr.emit('data', Buffer.from('partial err'));
+      mockChild.emit('exit', 7);
+      // 'close' never fires: a detached grandchild still holds the pipes.
+
+      await vi.advanceTimersByTimeAsync(STDIO_DRAIN_GRACE_MS - 1);
+      expect(settledAt).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      const result = await resultPromise;
+
+      // MUTATION GUARD M10: settle only on 'close' (or lengthen the
+      // grace) -> the promise is still pending here and this fails.
+      expect(settledAt).toBe(STDIO_DRAIN_GRACE_MS);
+      expect(result.exitCode).toBe(7);
+      expect(result.stdout).toBe('partial out');
+      expect(result.stderr).toBe('partial err');
+      expect(mockChild.stdout.destroy).toHaveBeenCalledTimes(1);
+      expect(mockChild.stderr.destroy).toHaveBeenCalledTimes(1);
+      // Late output after the grace is dropped, timers are all cleared
+      // and the data listeners are gone.
+      mockChild.stdout.emit('data', Buffer.from('late'));
+      expect(result.stdout).toBe('partial out');
+      expect(mockChild.stdout.listenerCount('data')).toBe(0);
+      expect(mockChild.stderr.listenerCount('data')).toBe(0);
+      expect(mockChild.listenerCount('close')).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles on close before the grace elapses, using the close code and the full output', async () => {
+    vi.useFakeTimers();
+    try {
+      const mockChild = new MockChildProcess();
+      spawnMock.mockReturnValue(mockChild);
+      const resultPromise = runClaude(makeCfg(), { message: makeMessage(), agent });
+      await vi.advanceTimersByTimeAsync(0);
+
+      mockChild.emit('exit', 1);
+      await vi.advanceTimersByTimeAsync(50);
+      mockChild.stdout.emit('data', Buffer.from('tail'));
+      mockChild.emit('close', 3);
+      const result = await resultPromise;
+
+      expect(result.exitCode).toBe(3);
+      expect(result.stdout).toBe('tail');
+      expect(mockChild.stdout.destroy).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
