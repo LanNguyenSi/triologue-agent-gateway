@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `examples/sse-client.ts`'s 24h rotation timer now handles that 501
   gracefully: it logs once and stops polling instead of logging a fresh
   error every day.
+- CI: `release.yml` now passes step values (release version, matrix entries, image tags) into `run:` scripts through `env:` and shell variables instead of interpolating `${{ }}` expressions into the script text. No behavior change for normal tags and versions.
 
 ### Security
 
