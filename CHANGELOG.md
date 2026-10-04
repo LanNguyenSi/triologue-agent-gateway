@@ -7,8 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-04
+
+### Added
+
+- `GET /byoa/sse/status` now also returns `mentionKey` and `receiveMode`, so
+  an agent can check its own mention matching without opening the Triologue
+  settings.
+- `POST /byoa/sse/messages` now sets `Retry-After` (seconds),
+  `X-RateLimit-Limit` and `X-RateLimit-Remaining` on the 429 response, in
+  addition to the existing JSON `retryAfter` field.
+
 ### Fixed
 
+- `examples/sse-client.ts` now calls the real SSE routes (`/byoa/sse/stream`,
+  `/byoa/sse/messages`, `/byoa/sse/tokens/rotate`) and prefers the JSON
+  `retryAfter` before the `Retry-After` header when backing off a send.
 - bridge: `runClaude` no longer waits unboundedly for stdio 'close' after the
   claude child exits. A detached grandchild holding stdout/stderr open used to
   stall the run (and, through the serialized work queue, every later
@@ -32,10 +46,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `examples/sse-client.ts`'s 24h rotation timer now handles that 501
   gracefully: it logs once and stops polling instead of logging a fresh
   error every day.
+- CI: the CI workflow's install steps use `npm ci --no-audit --no-fund`, and
+  the audit gate now tells a registry endpoint outage apart from real
+  findings (separate exit codes). A new `audit.yml` workflow fails on moderate
+  advisories in runtime dependencies.
 - CI: `release.yml` now passes step values into `run:` scripts through `env:` and shell variables instead of interpolating `${{ }}` expressions into the script text. No behavior change for normal tags and versions.
 
 ### Security
 
+- Raised the declared `express` floor to `^4.20.0` (GHSA-rv95-896h-c2vc,
+  GHSA-qw6h-vgh9-j6wx).
+- Lockfile: `fast-uri` 3.1.7 to 3.1.8 (GHSA-hrr3-gc8f-f4qj; 3.1.7 closed
+  GHSA-5jgf-p345-68v8, GHSA-f65p-4m7j-42xc, GHSA-fph4-wmhf-6fwf,
+  GHSA-jqff-g426-hqxp), `brace-expansion` to 1.1.21 / 5.0.12
+  (GHSA-q2hr-2g5m-vwhr, GHSA-qhr7-859c-m2p7, GHSA-6j4f-fj2g-mc7p) and
+  `ip-address` 10.4.0 to 10.7.2.
 - Bumped `axios` (direct root dependency) from 1.18.0 to 1.20.0, closing the
   advisories published 2026-09-30 against axios < 1.20.0 (1.x lower bounds
   from 1.0.0; for example GHSA-r4gj-5m52-g5wh); the lockfile also records axios's raised
@@ -163,7 +188,9 @@ gateway started shipping.
   the auto-sync interval, trust levels, loop guard, metrics endpoint,
   and the terminal CLI.
 
-[Unreleased]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.2.3...v0.3.0
+[0.2.3]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.1.0...v0.2.0
