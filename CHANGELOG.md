@@ -23,7 +23,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `examples/sse-client.ts` now calls the real SSE routes (`/byoa/sse/stream`,
   `/byoa/sse/messages`, `/byoa/sse/tokens/rotate`) and prefers the JSON
   `retryAfter` before the `Retry-After` header when backing off a send.
-
 - bridge: `runClaude` no longer waits unboundedly for stdio 'close' after the
   claude child exits. A detached grandchild holding stdout/stderr open used to
   stall the run (and, through the serialized work queue, every later
