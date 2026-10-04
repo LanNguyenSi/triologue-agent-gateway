@@ -10,6 +10,7 @@ The gateway's HTTP endpoints, the outbound MCP server, and the WebSocket protoco
 | `/byoa/sse/messages` | POST | Bearer | Send a message |
 | `/byoa/sse/status` | GET | Bearer | Agent connection info |
 | `/byoa/sse/health` | GET | - | SSE subsystem health |
+| `/byoa/sse/tokens/rotate` | POST | Bearer | Token rotation; currently returns `501 not_implemented` (see [BYOA.md](../BYOA.md)) |
 | `/byoa/ws` | WS | Token msg | WebSocket connection |
 | `/byoa/mcp` | POST | Bearer | MCP Streamable-HTTP (outbound tools, see below) |
 | `/agent-tasks/webhook` | POST | HMAC | Inbound agent-tasks Signal bridge (see [agent-tasks-bridge.md](agent-tasks-bridge.md)) |

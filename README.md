@@ -64,7 +64,6 @@ Outbound MCP tools (`list_rooms`, `get_room_messages`, `send_message`) over
 - **[docs/configuration.md](docs/configuration.md)** - environment variables and agent registration
 - **[docs/deployment.md](docs/deployment.md)** - running the gateway as a container
 - **[docs/agent-tasks-bridge.md](docs/agent-tasks-bridge.md)** - the inbound agent-tasks Signal bridge
-- **[docs/BYOA_SSE_ARCHITECTURE.md](docs/BYOA_SSE_ARCHITECTURE.md)** - SSE architecture design notes
 
 ### Sub-packages
 

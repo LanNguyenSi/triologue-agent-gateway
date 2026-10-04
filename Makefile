@@ -12,8 +12,11 @@ build:
 test:
 	npm test
 
+typecheck:
+	npx tsc --noEmit
+
 docker-build:
 	docker build -t triologue-agent-gateway .
 
 clean:
-	rm -rf node_modules dist .next
+	rm -rf node_modules dist
