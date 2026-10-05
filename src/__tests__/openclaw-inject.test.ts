@@ -1,23 +1,21 @@
 /**
  * Tests for src/openclaw-inject.ts.
  *
- * GATEWAY_TOKEN and DEVICE are computed once at module load from
- * hard-coded paths (/root/.openclaw/...) via top-level IIFEs - unlike
- * openclaw-bridge.ts's OpenClawBridge class, this file has no injectable
- * config seam, and adding one is out of scope for this task (the allowed
- * production changes are limited to the three named seam refactors). In
- * this test environment (and in CI) /root/.openclaw does not exist, so
- * DEVICE resolves to `null` and GATEWAY_TOKEN to `''` - the same fallback
- * path a real non-OpenClaw host hits. That gives us a real, unmocked
- * failure-path to test: the connect.challenge handler dereferences
- * `DEVICE.deviceId`, which throws against a null DEVICE and is caught by
- * injectToSession's own try/catch, which closes the socket and rejects.
- * `ws` itself is mocked so no real network I/O happens.
+ * GATEWAY_TOKEN and DEVICE are computed once at module load from paths
+ * under the OpenClaw base directory (OPENCLAW_HOME, default /root/.openclaw)
+ * via top-level IIFEs. This file pins the unset-OPENCLAW_HOME case (the
+ * variable is cleared around the import below), where /root/.openclaw does
+ * not exist in this test environment and in CI, so DEVICE resolves to `null`
+ * and GATEWAY_TOKEN to `''` - the same fallback path a real non-OpenClaw
+ * host hits. That gives us a real, unmocked failure-path to test: the
+ * connect.challenge handler dereferences `DEVICE.deviceId`, which throws
+ * against a null DEVICE and is caught by injectToSession's own try/catch,
+ * which closes the socket and rejects. `ws` itself is mocked so no real
+ * network I/O happens.
  *
- * The success path (full signed handshake) is exercised for the same
- * protocol logic in openclaw-bridge.test.ts, where devicePath/configPath
- * are constructor parameters and a real temp device identity can be
- * supplied - that seam does not exist here.
+ * The success path (full signed handshake) and the OPENCLAW_HOME-driven
+ * resolution are exercised in openclaw-bridge.test.ts (constructor path
+ * parameters) and openclaw-paths.test.ts (OPENCLAW_HOME seam).
  *
  * Mutation guards (marked inline):
  *   M1: injectToSession stops rejecting on a socket 'error' event
@@ -42,7 +40,15 @@ class MockWebSocket extends EventEmitter {
 
 vi.mock('ws', () => ({ default: MockWebSocket }));
 
-const { injectToSession } = await import('../openclaw-inject.js');
+const savedOpenClawHome = process.env.OPENCLAW_HOME;
+delete process.env.OPENCLAW_HOME;
+let injectToSession: typeof import('../openclaw-inject.js').injectToSession;
+try {
+  ({ injectToSession } = await import('../openclaw-inject.js'));
+} finally {
+  if (savedOpenClawHome === undefined) delete process.env.OPENCLAW_HOME;
+  else process.env.OPENCLAW_HOME = savedOpenClawHome;
+}
 
 // Captured immediately after import, before the `beforeEach` below resets
 // MockWebSocket.instances - so it can't mask a side effect that happened
@@ -112,7 +118,12 @@ describe('injectToSession - failure paths (no OpenClaw identity present)', () =>
     const ws = MockWebSocket.instances[0];
     ws.emit('message', Buffer.from(JSON.stringify({ event: 'connect.challenge', payload: { nonce: 'n1' } })));
 
-    await expect(resultPromise).rejects.toThrow();
+    // Assert the cause, not just a rejection: with an OpenClaw identity
+    // reachable (e.g. OPENCLAW_HOME not cleared above) the handshake would
+    // instead run into the inject timeout, which must not count as a pass.
+    const err = await resultPromise.then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toBe('OpenClaw inject timeout');
     expect(ws.close).toHaveBeenCalled();
   });
 

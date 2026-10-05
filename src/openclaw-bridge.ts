@@ -20,6 +20,7 @@
 import WebSocket from 'ws';
 import { randomUUID, createPrivateKey, createPublicKey, sign as cryptoSign } from 'crypto';
 import * as fs from 'fs';
+import { openClawConfigPath, openClawDevicePath } from './openclaw-paths.js';
 
 // ── Types ──
 
@@ -28,9 +29,9 @@ export interface OpenClawBridgeConfig {
   gatewayUrl?: string;
   /** Gateway auth token (auto-read from openclaw.json if not provided) */
   gatewayToken?: string;
-  /** Path to openclaw.json (default: /root/.openclaw/openclaw.json) */
+  /** Path to openclaw.json (default: $OPENCLAW_HOME/openclaw.json, /root/.openclaw when unset) */
   configPath?: string;
-  /** Path to device identity (default: /root/.openclaw/identity/device.json) */
+  /** Path to device identity (default: $OPENCLAW_HOME/identity/device.json, /root/.openclaw when unset) */
   devicePath?: string;
   /** Session key to inject into (default: agent:main:main) */
   sessionKey?: string;
@@ -76,8 +77,8 @@ export class OpenClawBridge {
     this.config = {
       gatewayUrl: config.gatewayUrl ?? 'ws://127.0.0.1:18789',
       gatewayToken: config.gatewayToken ?? '',
-      configPath: config.configPath ?? '/root/.openclaw/openclaw.json',
-      devicePath: config.devicePath ?? '/root/.openclaw/identity/device.json',
+      configPath: config.configPath ?? openClawConfigPath(),
+      devicePath: config.devicePath ?? openClawDevicePath(),
       sessionKey: config.sessionKey ?? 'agent:main:main',
       responseTimeoutMs: config.responseTimeoutMs ?? 120_000,
       scopes: config.scopes ?? ['operator.read', 'operator.write', 'operator.admin'],

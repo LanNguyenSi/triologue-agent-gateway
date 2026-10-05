@@ -12,6 +12,7 @@ Environment variables and agent registration for the gateway.
 | `GATEWAY_USERNAME` | `gateway` | Gateway's Triologue username |
 | `AGENTS_CONFIG` | `./agents.json` | Fallback agent config file, loaded when the Triologue API sync is unavailable |
 | `REDIS_URL` | `redis://localhost:6379` | Redis for SSE idempotency + resume |
+| `OPENCLAW_HOME` | `/root/.openclaw` | Base directory of a local OpenClaw install. Only used by agents with delivery `openclaw-inject`: the gateway reads `$OPENCLAW_HOME/openclaw.json` (gateway token) and `$OPENCLAW_HOME/identity/device.json` (device keypair), and the reply hint injected into the session names `$OPENCLAW_HOME/workspace/send-to-triologue.sh`. The two files are read when the OpenClaw bridge/inject module is loaded or constructed (restart to change them), the reply hint is resolved per message; unset or blank keeps the default, so existing deployments need no change |
 
 The optional agent-tasks bridge adds `AGENT_TASKS_*` variables; see
 [agent-tasks-bridge.md](agent-tasks-bridge.md) and
