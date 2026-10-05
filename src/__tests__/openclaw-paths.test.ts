@@ -157,3 +157,19 @@ describe('openClawReplyHint', () => {
     }
   });
 });
+
+// src/index.ts cannot be imported without starting the server, so the two
+// inject call sites are pinned at the source level: both must build the hint
+// through openClawReplyHint and neither may carry the path literal.
+describe('src/index.ts reply hint call sites', () => {
+  const indexSource = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
+
+  it('uses openClawReplyHint at both OpenClaw inject sites', () => {
+    expect(indexSource.match(/openClawReplyHint\(msg\.roomId\)/g)).toHaveLength(2);
+  });
+
+  it('does not hard-code the reply script path', () => {
+    expect(indexSource).not.toContain('send-to-triologue.sh');
+    expect(indexSource).not.toContain('/root/.openclaw');
+  });
+});
