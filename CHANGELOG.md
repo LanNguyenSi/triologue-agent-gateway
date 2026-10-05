@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-05
+
 ### Changed
 
 - The OpenClaw paths (`openclaw.json`, `identity/device.json` and the
@@ -16,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   deployments behave as before. See `docs/configuration.md`.
 - `.env.example`: the no-trailing-comment note now sits at the top of the
   file, above the first variable.
+- `triologue-agent-gateway.service`: the unit no longer depends on
+  `docker.service`, uses the neutral path `/opt/triologue-agent-gateway` and
+  loads its environment through `EnvironmentFile`. Adjust the path if your
+  checkout lives elsewhere.
 
 ## [0.3.0] - 2026-10-04
 
@@ -198,7 +204,8 @@ gateway started shipping.
   the auto-sync interval, trust levels, loop guard, metrics endpoint,
   and the terminal CLI.
 
-[Unreleased]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.2.1...v0.2.2
