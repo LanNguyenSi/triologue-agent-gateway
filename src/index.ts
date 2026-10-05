@@ -19,6 +19,7 @@ import { dispatchWebhook } from './webhook-dispatch.js';
 import { TriologueBridge } from './triologue-bridge.js';
 import { shouldDeliver } from './loop-guard.js';
 import { injectToSession } from './openclaw-inject.js';
+import { openClawReplyScriptPath } from './openclaw-paths.js';
 import { loadReadTracker, getLastSeenMessageId, markMessageSeen } from './read-tracker.js';
 import { metrics } from './metrics.js';
 import { sseRouter, shutdownSSE, setBridge as setSSEBridge, hasSSEClient, fanoutToSSEClient } from './byoa-sse.js';
@@ -151,7 +152,7 @@ bridge.onMessage(async (msg) => {
       if (contextMessages.length > 0) {
         injectMsg = `[Queued messages while agent was busy]\n\n---\n${contextMessages.map((m, i) => `Queued #${i + 1}\n${m}`).join('\n\n---\n')}\n`;
       }
-      injectMsg += `[${new Date(msg.timestamp).toLocaleString('de-DE', { timeZone: 'Europe/Berlin', dateStyle: 'short', timeStyle: 'short' })}] [Triologue:${msg.roomId}] ${msg.senderUsername}: ${msg.content}\n\n(Reply with: /root/.openclaw/workspace/send-to-triologue.sh ${msg.roomId} "<your message>")`;
+      injectMsg += `[${new Date(msg.timestamp).toLocaleString('de-DE', { timeZone: 'Europe/Berlin', dateStyle: 'short', timeStyle: 'short' })}] [Triologue:${msg.roomId}] ${msg.senderUsername}: ${msg.content}\n\n(Reply with: ${openClawReplyScriptPath()} ${msg.roomId} "<your message>")`;
 
       injectToSession(injectMsg)
         .then(() => console.log(`[openclaw-inject:${client.agent.mentionKey}] ✅${contextMessages.length > 0 ? ` (+${contextMessages.length} unread)` : ''}`))
@@ -229,7 +230,7 @@ bridge.onMessage(async (msg) => {
       if (contextMessages.length > 0) {
         injectMsg = `[Queued messages while agent was busy]\n\n---\n${contextMessages.map((m, i) => `Queued #${i + 1}\n${m}`).join('\n\n---\n')}\n`;
       }
-      injectMsg += `[${new Date(msg.timestamp).toLocaleString('de-DE', { timeZone: 'Europe/Berlin', dateStyle: 'short', timeStyle: 'short' })}] [Triologue:${msg.roomId}] ${msg.senderUsername}: ${msg.content}\n\n(Reply with: /root/.openclaw/workspace/send-to-triologue.sh ${msg.roomId} "<your message>")`;
+      injectMsg += `[${new Date(msg.timestamp).toLocaleString('de-DE', { timeZone: 'Europe/Berlin', dateStyle: 'short', timeStyle: 'short' })}] [Triologue:${msg.roomId}] ${msg.senderUsername}: ${msg.content}\n\n(Reply with: ${openClawReplyScriptPath()} ${msg.roomId} "<your message>")`;
 
       injectToSession(injectMsg)
         .then(() => console.log(`[openclaw-inject:${agent.mentionKey}] ✅${contextMessages.length > 0 ? ` (+${contextMessages.length} unread)` : ''}`))

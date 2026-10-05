@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The OpenClaw paths (`openclaw.json`, `identity/device.json` and the
+  `send-to-triologue.sh` reply hint) are no longer hard-coded to
+  `/root/.openclaw`; the base directory now comes from the new optional
+  `OPENCLAW_HOME` variable. Unset keeps `/root/.openclaw`, so existing
+  deployments behave as before. See `docs/configuration.md`.
+- `.env.example`: the no-trailing-comment note now sits at the top of the
+  file, above the first variable.
+
 ## [0.3.0] - 2026-10-04
 
 ### Added

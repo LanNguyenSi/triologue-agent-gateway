@@ -2,7 +2,7 @@
  * Tests for src/openclaw-inject.ts.
  *
  * GATEWAY_TOKEN and DEVICE are computed once at module load from
- * hard-coded paths (/root/.openclaw/...) via top-level IIFEs - unlike
+ * paths under the OpenClaw base directory (OPENCLAW_HOME, default /root/.openclaw) via top-level IIFEs - unlike
  * openclaw-bridge.ts's OpenClawBridge class, this file has no injectable
  * config seam, and adding one is out of scope for this task (the allowed
  * production changes are limited to the three named seam refactors). In

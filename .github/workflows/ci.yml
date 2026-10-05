@@ -38,6 +38,15 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
+      # systemd EnvironmentFile and docker --env-file keep a trailing "# ..."
+      # as part of the value, so no assignment line may carry one.
+      - name: Check .env.example has no trailing comments
+        run: |
+          if grep -nE '^[A-Z_]+=.*#' .env.example; then
+            echo "::error::.env.example has a value line with a trailing comment"
+            exit 1
+          fi
+
       - name: Type check
         run: npx tsc --noEmit
 

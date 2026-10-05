@@ -19,10 +19,11 @@ import WebSocket from 'ws';
 import { randomUUID, createPrivateKey, createPublicKey, sign as cryptoSign } from 'crypto';
 import * as fs from 'fs';
 import { fileURLToPath } from 'node:url';
+import { openClawConfigPath, openClawDevicePath } from './openclaw-paths.js';
 
 const GATEWAY_TOKEN = (() => {
   try {
-    const cfg = JSON.parse(fs.readFileSync('/root/.openclaw/openclaw.json', 'utf-8'));
+    const cfg = JSON.parse(fs.readFileSync(openClawConfigPath(), 'utf-8'));
     return cfg.gateway?.auth?.token as string;
   } catch {
     return process.env.OPENCLAW_GATEWAY_TOKEN ?? '';
@@ -31,7 +32,7 @@ const GATEWAY_TOKEN = (() => {
 
 const DEVICE = (() => {
   try {
-    return JSON.parse(fs.readFileSync('/root/.openclaw/identity/device.json', 'utf-8'));
+    return JSON.parse(fs.readFileSync(openClawDevicePath(), 'utf-8'));
   } catch {
     return null;
   }
