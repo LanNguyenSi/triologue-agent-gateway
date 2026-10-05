@@ -118,7 +118,12 @@ describe('injectToSession - failure paths (no OpenClaw identity present)', () =>
     const ws = MockWebSocket.instances[0];
     ws.emit('message', Buffer.from(JSON.stringify({ event: 'connect.challenge', payload: { nonce: 'n1' } })));
 
-    await expect(resultPromise).rejects.toThrow();
+    // Assert the cause, not just a rejection: with an OpenClaw identity
+    // reachable (e.g. OPENCLAW_HOME not cleared above) the handshake would
+    // instead run into the inject timeout, which must not count as a pass.
+    const err = await resultPromise.then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).not.toBe('OpenClaw inject timeout');
     expect(ws.close).toHaveBeenCalled();
   });
 
