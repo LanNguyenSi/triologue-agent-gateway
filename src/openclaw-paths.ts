@@ -27,3 +27,11 @@ export function openClawDevicePath(env: NodeJS.ProcessEnv = process.env): string
 export function openClawReplyScriptPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.posix.join(resolveOpenClawHome(env), 'workspace', 'send-to-triologue.sh');
 }
+
+/**
+ * Reply instruction appended to every message injected into an OpenClaw
+ * session. Resolved per message so it follows OPENCLAW_HOME.
+ */
+export function openClawReplyHint(roomId: string, env: NodeJS.ProcessEnv = process.env): string {
+  return `(Reply with: ${openClawReplyScriptPath(env)} ${roomId} "<your message>")`;
+}

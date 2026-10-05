@@ -31,6 +31,7 @@ const {
   openClawConfigPath,
   openClawDevicePath,
   openClawReplyScriptPath,
+  openClawReplyHint,
 } = await import('../openclaw-paths.js');
 
 let tmpDir: string;
@@ -129,5 +130,30 @@ describe('OpenClawBridge default paths follow OPENCLAW_HOME', () => {
     expect(() => new OpenClawBridge()).toThrow(
       `Device identity not found at ${path.join(tmpDir, 'identity', 'device.json')}`,
     );
+  });
+});
+
+describe('openClawReplyHint', () => {
+  it('names the reply script under OPENCLAW_HOME and the room id', () => {
+    expect(openClawReplyHint('room-1', { OPENCLAW_HOME: '/opt/oc' })).toBe(
+      '(Reply with: /opt/oc/workspace/send-to-triologue.sh room-1 "<your message>")',
+    );
+  });
+
+  it('keeps the historical default when OPENCLAW_HOME is unset', () => {
+    expect(openClawReplyHint('room-2', {})).toBe(
+      '(Reply with: /root/.openclaw/workspace/send-to-triologue.sh room-2 "<your message>")',
+    );
+  });
+
+  it('reads process.env by default', () => {
+    const saved = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = '/from/process/env';
+    try {
+      expect(openClawReplyHint('r')).toContain('/from/process/env/workspace/send-to-triologue.sh r ');
+    } finally {
+      if (saved === undefined) delete process.env.OPENCLAW_HOME;
+      else process.env.OPENCLAW_HOME = saved;
+    }
   });
 });

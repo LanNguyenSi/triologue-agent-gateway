@@ -38,12 +38,23 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
-      # systemd EnvironmentFile and docker --env-file keep a trailing "# ..."
-      # as part of the value, so no assignment line may carry one.
+      # dotenv truncates an unquoted value at "#", while systemd
+      # EnvironmentFile and docker --env-file keep a trailing "# ..." as part
+      # of the value, so no assignment line may contain a "#" after the "=".
       - name: Check .env.example has no trailing comments
         run: |
-          if grep -nE '^[A-Z_]+=.*#' .env.example; then
-            echo "::error::.env.example has a value line with a trailing comment"
+          if [ ! -f .env.example ]; then
+            echo "::error::.env.example is missing"
+            exit 1
+          fi
+          status=0
+          grep -nE '^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*=.*#' .env.example || status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "::error::.env.example value line contains '#': systemd/docker keep it as part of the value and dotenv truncates there"
+            exit 1
+          fi
+          if [ "$status" -ne 1 ]; then
+            echo "::error::grep failed on .env.example (exit $status)"
             exit 1
           fi
 
