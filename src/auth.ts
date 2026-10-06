@@ -26,6 +26,9 @@ interface AgentConfig {
   connectionType?: 'webhook' | 'websocket' | 'both';
   receiveMode?: 'mentions' | 'all';
   delivery?: 'webhook' | 'openclaw-inject';
+  /** Token replaced by the last rotation; honoured only until previousTokenExpiresAt. */
+  previousToken?: string | null;
+  previousTokenExpiresAt?: string | null;
 }
 
 // ── Config ──
@@ -123,29 +126,149 @@ export function stopSync(): void {
 
 const tokenMap = new Map<string, AgentInfo>();
 
+/**
+ * Tokens replaced by a rotation, honoured as a bearer only inside the grace
+ * window Triologue reports (previousTokenExpiresAt). Kept apart from tokenMap
+ * so the rotate route can insist on the CURRENT token.
+ */
+const previousTokenMap = new Map<string, { agent: AgentInfo; expiresAtMs: number }>();
+
+function toAgentInfo(a: AgentConfig): AgentInfo {
+  return {
+    id: a.userId,
+    name: a.name,
+    userId: a.userId,
+    username: a.username,
+    mentionKey: a.mentionKey,
+    webhookUrl: a.webhookUrl ?? null,
+    webhookSecret: a.webhookSecret ?? null,
+    trustLevel: a.trustLevel,
+    emoji: a.emoji,
+    color: a.color ?? null,
+    connectionType: a.connectionType ?? 'both',
+    receiveMode: a.receiveMode ?? 'mentions',
+    delivery: a.delivery ?? 'webhook',
+  };
+}
+
 export function buildTokenIndex(): void {
   tokenMap.clear();
+  previousTokenMap.clear();
   for (const a of agents) {
-    tokenMap.set(a.token, {
-      id: a.userId,
-      name: a.name,
-      userId: a.userId,
-      username: a.username,
-      mentionKey: a.mentionKey,
-      webhookUrl: a.webhookUrl ?? null,
-      webhookSecret: a.webhookSecret ?? null,
-      trustLevel: a.trustLevel,
-      emoji: a.emoji,
-      color: a.color ?? null,
-      connectionType: a.connectionType ?? 'both',
-      receiveMode: a.receiveMode ?? 'mentions',
-      delivery: a.delivery ?? 'webhook',
-    });
+    tokenMap.set(a.token, toAgentInfo(a));
+  }
+  for (const a of agents) {
+    const prev = a.previousToken;
+    if (typeof prev !== 'string' || prev === '' || typeof a.previousTokenExpiresAt !== 'string') continue;
+    const expiresAtMs = Date.parse(a.previousTokenExpiresAt);
+    // An unparseable expiry never opens a window; a token that is some
+    // agent's current token is never demoted to a grace entry.
+    if (Number.isNaN(expiresAtMs) || tokenMap.has(prev)) continue;
+    previousTokenMap.set(prev, { agent: toAgentInfo(a), expiresAtMs });
   }
 }
 
-export function authenticateToken(token: string): AgentInfo | null {
+/** Current token only. The rotate route uses this; a grace-window token fails. */
+export function authenticateCurrentToken(token: string): AgentInfo | null {
   return tokenMap.get(token) ?? null;
+}
+
+/**
+ * Current token, or a previous token while its grace window is open (it is
+ * dead at and after the expiry instant, matching Triologue).
+ */
+export function authenticateToken(token: string, now: number = Date.now()): AgentInfo | null {
+  const current = tokenMap.get(token);
+  if (current) return current;
+  const prev = previousTokenMap.get(token);
+  if (prev && prev.expiresAtMs > now) return prev.agent;
+  return null;
+}
+
+export type RotateResult =
+  | { ok: true; token: string; previousTokenExpiresAt: string; graceSeconds: number | null }
+  | { ok: false; status: 403 | 404 | 409 | 502; error: string };
+
+const agentTokenIdCache = new Map<string, string>();
+
+/**
+ * Triologue's rotate route addresses the AgentToken row by its own id, which
+ * gateway-config does not ship (it ships the user id). The agent's own
+ * /me/context answer carries it, so resolve it once per agent with the
+ * agent's current token and cache it.
+ */
+async function resolveAgentTokenId(userId: string, currentToken: string): Promise<string | null> {
+  const cached = agentTokenIdCache.get(userId);
+  if (cached) return cached;
+  const res = await fetch(`${TRIOLOGUE_URL}/api/agents/me/context`, {
+    headers: { Authorization: `Bearer ${currentToken}` },
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  const id = data?.agent?.id;
+  if (typeof id !== 'string' || id === '' || data?.agent?.userId !== userId) return null;
+  agentTokenIdCache.set(userId, id);
+  return id;
+}
+
+/**
+ * Ask Triologue to rotate `currentToken` of `agent`. Authorization is the
+ * gateway token, X-Agent-Token the agent's current token. The caller must
+ * already have proven `currentToken` is the CURRENT token (not a grace one).
+ * Upstream bodies and errors are never echoed: only a fixed error string.
+ */
+export async function rotateTokenUpstream(agent: AgentInfo, currentToken: string): Promise<RotateResult> {
+  try {
+    const agentTokenId = await resolveAgentTokenId(agent.userId, currentToken);
+    if (!agentTokenId) return { ok: false, status: 502, error: 'upstream_unavailable' };
+
+    const res = await fetch(
+      `${TRIOLOGUE_URL}/api/agents/${encodeURIComponent(agentTokenId)}/token/rotate`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${GATEWAY_TOKEN}`,
+          'X-Agent-Token': currentToken,
+        },
+        signal: AbortSignal.timeout(5000),
+      },
+    );
+    if (res.status === 403) return { ok: false, status: 403, error: 'forbidden' };
+    if (res.status === 404) return { ok: false, status: 404, error: 'agent_not_found' };
+    if (res.status === 409) return { ok: false, status: 409, error: 'rotation_conflict' };
+    if (!res.ok) return { ok: false, status: 502, error: 'upstream_error' };
+
+    const data = await res.json();
+    if (
+      typeof data?.token !== 'string' ||
+      !data.token.startsWith('byoa_') ||
+      typeof data?.previousTokenExpiresAt !== 'string' ||
+      Number.isNaN(Date.parse(data.previousTokenExpiresAt))
+    ) {
+      return { ok: false, status: 502, error: 'upstream_invalid_response' };
+    }
+
+    // Apply locally so the new token authenticates before the next sync;
+    // the sync stays the source of truth and overwrites this.
+    const entry = agents.find(a => a.userId === agent.userId && a.token === currentToken);
+    if (entry) {
+      entry.token = data.token;
+      entry.previousToken = currentToken;
+      entry.previousTokenExpiresAt = data.previousTokenExpiresAt;
+      buildTokenIndex();
+    }
+
+    return {
+      ok: true,
+      token: data.token,
+      previousTokenExpiresAt: data.previousTokenExpiresAt,
+      graceSeconds: typeof data.graceSeconds === 'number' ? data.graceSeconds : null,
+    };
+  } catch (err: any) {
+    console.warn(`⚠️ Token rotate error: ${err?.name ?? 'Error'}`);
+    return { ok: false, status: 502, error: 'upstream_unavailable' };
+  }
 }
 
 export function getAgentByUsername(username: string): AgentInfo | null {

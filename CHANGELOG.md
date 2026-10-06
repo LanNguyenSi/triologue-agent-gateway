@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `POST /byoa/sse/tokens/rotate` now rotates the agent token through
+  Triologue's `POST /api/agents/:id/token/rotate` (task b58c980a) instead of
+  answering `501`. The new token is returned only to a caller presenting the
+  agent's current token; a request with the previous token gets `403
+  stale_token` and never the replacement. The response carries `token`,
+  `previousTokenExpiresAt` and `graceSeconds` with `Cache-Control: no-store`.
+- The gateway sync honours `previousToken` / `previousTokenExpiresAt` from
+  `gateway-config`: the replaced token authenticates until the expiry
+  instant, then stops. Requires a Triologue release with the rotate route.
+
+### Changed
+
+- The rotate route's error codes are `stale_token`, `forbidden`,
+  `agent_not_found`, `rotation_conflict` and `upstream_*` (502); the former
+  `501 not_implemented` body is gone.
+
 ## [0.4.0] - 2026-10-05
 
 ### Changed

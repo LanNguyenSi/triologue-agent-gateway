@@ -12,9 +12,9 @@
  *   - shutdownSSE closes all open connections
  *   - GET /status includes mentionKey and receiveMode
  *   - POST /messages sets Retry-After and X-RateLimit-* headers on 429
- *   - POST /tokens/rotate: 401 on missing/invalid auth, 501 with a
- *     documented body for a valid token, and the presented token still
- *     authenticates afterwards (nothing about it changed)
+ *   - POST /tokens/rotate: 401 on missing/invalid auth, 403 for a token that
+ *     is not the agent's current one (grace-window token) with no upstream
+ *     call, and the new token returned only for the current token
  *
  * Mutation guard:
  *   M-fanout: break the per-agent target filter in fanout (deliver to all
@@ -24,7 +24,9 @@
  *   M-429-headers: stop setting Retry-After/X-RateLimit-* on the 429 path
  *   → the rate-limiting test fails.
  *   M-rotate-auth-order: answer /tokens/rotate before authenticateSSE
- *   rejects an invalid/missing token → the 401-before-501 tests fail.
+ *   rejects an invalid/missing token → the 401 tests fail.
+ *   M-rotate-current-check: drop the current-token check in the rotate
+ *   route → the stale-token test fails.
  */
 
 import {
@@ -79,9 +81,13 @@ vi.mock('../metrics', () => ({
 }));
 
 const authenticateTokenMock = vi.fn<(token: string) => AgentInfo | null>();
+const authenticateCurrentTokenMock = vi.fn<(token: string) => AgentInfo | null>();
+const rotateTokenUpstreamMock = vi.fn();
 
 vi.mock('../auth', () => ({
   authenticateToken: (token: string) => authenticateTokenMock(token),
+  authenticateCurrentToken: (token: string) => authenticateCurrentTokenMock(token),
+  rotateTokenUpstream: (...args: unknown[]) => rotateTokenUpstreamMock(...args),
 }));
 
 // ── Import after mocks ─────────────────────────────────────────────────────────
@@ -151,6 +157,8 @@ afterAll(async () => {
 
 beforeEach(() => {
   authenticateTokenMock.mockReset();
+  authenticateCurrentTokenMock.mockReset();
+  rotateTokenUpstreamMock.mockReset();
 });
 
 afterEach(() => {
@@ -533,31 +541,67 @@ describe('POST /tokens/rotate', () => {
     expect(status).toBe(401);
   });
 
-  it('returns 501 with a documented body for a valid token', async () => {
+  it('returns 403 stale_token for a grace-window token and never calls Triologue or returns a new token', async () => {
+    // The previous token still authenticates (grace window) but is not current.
     authenticateTokenMock.mockReturnValue(fakeAgent);
+    authenticateCurrentTokenMock.mockReturnValue(null);
+    rotateTokenUpstreamMock.mockResolvedValue({
+      ok: true,
+      token: 'byoa_must_never_be_returned',
+      previousTokenExpiresAt: '2030-01-01T00:00:00.000Z',
+      graceSeconds: 300,
+    });
 
-    const { status, body } = await postJSON('/byoa/sse/tokens/rotate', 'valid-token', {});
+    const { status, body } = await postJSON('/byoa/sse/tokens/rotate', 'old-token', {});
 
-    expect(status).toBe(501);
-    // MUTATION GUARD: if any of these fields are dropped or renamed, this
-    // fails, since callers (examples/sse-client.ts) rely on `error` to
-    // detect "not implemented" and BYOA.md documents these exact field names.
-    expect(body.error).toBe('not_implemented');
-    expect(typeof body.message).toBe('string');
-    expect(body.message.length).toBeGreaterThan(0);
-    expect(body.docs).toBe('BYOA.md#token-rotation');
+    // MUTATION GUARD (M-rotate-current-check): without the current-token
+    // check the route would call upstream and hand the new token out.
+    expect(status).toBe(403);
+    expect(body.error).toBe('stale_token');
+    expect(body.token).toBeUndefined();
+    expect(rotateTokenUpstreamMock).not.toHaveBeenCalled();
   });
 
-  it('leaves the presented token authenticating after the call, rotation changed nothing', async () => {
+  it('returns 403 when the current-token lookup resolves to a different agent', async () => {
     authenticateTokenMock.mockReturnValue(fakeAgent);
+    authenticateCurrentTokenMock.mockReturnValue(fakeAgent2);
 
-    await postJSON('/byoa/sse/tokens/rotate', 'valid-token', {});
+    const { status } = await postJSON('/byoa/sse/tokens/rotate', 'odd-token', {});
 
-    // The route never touches auth state, so a follow-up request with the
-    // same token still authenticates via the unchanged authenticateToken
-    // mock: nothing was rotated, invalidated, or replaced.
-    const { status } = await getJSON('/byoa/sse/status', 'valid-token');
+    expect(status).toBe(403);
+    expect(rotateTokenUpstreamMock).not.toHaveBeenCalled();
+  });
+
+  it('returns the new token, expiry and grace for the current token, uncached', async () => {
+    authenticateTokenMock.mockReturnValue(fakeAgent);
+    authenticateCurrentTokenMock.mockReturnValue(fakeAgent);
+    rotateTokenUpstreamMock.mockResolvedValue({
+      ok: true,
+      token: 'byoa_new_token',
+      previousTokenExpiresAt: '2030-01-01T00:00:00.000Z',
+      graceSeconds: 300,
+    });
+
+    const { status, body, headers } = await postJSON('/byoa/sse/tokens/rotate', 'cur-token', {});
+
     expect(status).toBe(200);
-    expect(authenticateTokenMock).toHaveBeenCalledWith('valid-token');
+    expect(body).toEqual({
+      token: 'byoa_new_token',
+      previousTokenExpiresAt: '2030-01-01T00:00:00.000Z',
+      graceSeconds: 300,
+    });
+    expect(headers['cache-control']).toBe('no-store');
+    expect(rotateTokenUpstreamMock).toHaveBeenCalledWith(fakeAgent, 'cur-token');
+  });
+
+  it('maps an upstream failure to its status with a fixed error code only', async () => {
+    authenticateTokenMock.mockReturnValue(fakeAgent);
+    authenticateCurrentTokenMock.mockReturnValue(fakeAgent);
+    rotateTokenUpstreamMock.mockResolvedValue({ ok: false, status: 409, error: 'rotation_conflict' });
+
+    const { status, body } = await postJSON('/byoa/sse/tokens/rotate', 'cur-token', {});
+
+    expect(status).toBe(409);
+    expect(body).toEqual({ error: 'rotation_conflict' });
   });
 });
