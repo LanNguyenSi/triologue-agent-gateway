@@ -6,7 +6,7 @@
 // New routes:
 //   - GET  /byoa/sse/stream (receive messages via SSE)
 //   - POST /byoa/sse/messages (send messages via REST)
-//   - POST /byoa/sse/tokens/rotate (token rotation)
+//   - POST /byoa/sse/tokens/rotate (token rotation via Triologue)
 //   - GET  /byoa/sse/status (agent status)
 //
 // Redis dependency: npm install ioredis
@@ -20,7 +20,7 @@ import type { AgentInfo } from './types.js';
 import type { TriologueBridge } from './triologue-bridge.js';
 
 // Use existing auth system
-import { authenticateToken } from './auth.js';
+import { authenticateToken, authenticateCurrentToken, rotateTokenUpstream } from './auth.js';
 
 // ── Bridge reference (injected from index.ts) ──
 let bridge: TriologueBridge | null = null;
@@ -240,19 +240,36 @@ sseRouter.post('/messages', authenticateSSE, rateLimitMiddleware, async (req: Re
 });
 
 // ── 3) Token Rotation ──
-// Requires Triologue server-side support (not yet implemented): there is no
-// route in Triologue to regenerate a token in its own DB, so any rotation
-// performed only here would either bypass admin revocation (see BYOA.md's
-// Token Rotation section) or just alias the same token under a new name.
-// authenticateSSE below still requires a valid bearer token before this
-// handler answers, so the 501 is not an unauthenticated probe surface.
+// Rotation is performed by Triologue (POST /api/agents/:id/token/rotate); the
+// gateway only brokers it. The new token is returned solely to a caller that
+// presents the agent's CURRENT token: a previous token that is still inside
+// its grace window authenticates elsewhere but is refused here with 403, so
+// a leaked old token can never mint or read the replacement. Triologue
+// repeats the same check against its own row.
 
-sseRouter.post('/tokens/rotate', authenticateSSE, (_req: Request, res: Response) => {
-  res.status(501).json({
-    error: 'not_implemented',
-    message:
-      'Token rotation requires upstream support in Triologue (no token regenerate API exists yet); rotate the token in Triologue and restart the agent with the new token.',
-    docs: 'BYOA.md#token-rotation',
+sseRouter.post('/tokens/rotate', authenticateSSE, async (req: Request, res: Response) => {
+  const agent: AgentInfo = (req as any).agent;
+  const token: string = (req as any).token;
+
+  const current = authenticateCurrentToken(token);
+  if (!current || current.userId !== agent.userId) {
+    metrics.recordAuthFailure('SSE: Rotate with non-current token');
+    return res.status(403).json({
+      error: 'stale_token',
+      message: 'Token rotation requires the current token; this token has been replaced.',
+    });
+  }
+
+  const result = await rotateTokenUpstream(current, token);
+  if (!result.ok) {
+    return res.status(result.status).json({ error: result.error });
+  }
+
+  res.set('Cache-Control', 'no-store');
+  return res.json({
+    token: result.token,
+    previousTokenExpiresAt: result.previousTokenExpiresAt,
+    graceSeconds: result.graceSeconds,
   });
 });
 

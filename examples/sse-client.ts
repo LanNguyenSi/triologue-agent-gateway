@@ -27,6 +27,13 @@ interface AgentConfig {
   onDisconnect?: (reason: string) => void;
   onError?: (error: Error) => void;
   maxReconnectDelay?: number; // Default: 30s
+  /**
+   * Called with the replacement token after a successful rotateToken().
+   * The new token MUST be stored durably here (secret store, env file, ...):
+   * after the grace window (default 300 s) the old token is dead, so a restart
+   * that still reads the old token is locked out.
+   */
+  onTokenRotated?: (newToken: string) => void | Promise<void>;
 }
 
 interface IncomingMessage {
@@ -330,13 +337,13 @@ export class TriologueAgent {
   // -------------------------------------------------------------------------
 
   /**
-   * Calls POST /byoa/sse/tokens/rotate. As of now that route answers
-   * `501 not_implemented` (see BYOA.md's Token Rotation section): the
-   * gateway has no durable per-token store, so throws
-   * TokenRotationNotSupportedError instead of trying to read a `token`
-   * field out of a body that will not have one. Once the gateway ships
-   * upstream-backed rotation, a plain 200 flows through the path below
-   * unchanged.
+   * Calls POST /byoa/sse/tokens/rotate with the CURRENT token. A 200 carries
+   * the replacement token; the old one keeps working for the grace window
+   * (default 300 s). A 403 `stale_token` means this client presented an
+   * already replaced token and never receives a new one. The new token is
+   * handed to config.onTokenRotated, where the caller must persist it.
+   * A 501 (older gateways without upstream-backed rotation) throws
+   * TokenRotationNotSupportedError.
    */
   async rotateToken(): Promise<string> {
     const response = await fetch(
@@ -357,6 +364,7 @@ export class TriologueAgent {
 
     const { token } = await response.json();
     this.config.token = token;
+    await this.config.onTokenRotated?.(token);
 
     // Reconnect with new token
     this.disconnect();
@@ -371,7 +379,7 @@ export class TriologueAgent {
 // Helper
 // ---------------------------------------------------------------------------
 
-/** Thrown by rotateToken() when the gateway answers 501 for the rotate route. */
+/** Thrown by rotateToken() when an older gateway answers 501 for the rotate route. */
 export class TokenRotationNotSupportedError extends Error {
   constructor() {
     super("Token rotation not supported by this gateway (501)");
@@ -391,6 +399,13 @@ async function main() {
   const agent = new TriologueAgent({
     token: process.env.BYOA_TOKEN!,
     gatewayUrl: "https://opentriologue.ai/gateway",
+
+    // Persist the rotated token (secret store, env file, ...). Without this a
+    // restart after the grace window starts with the dead old token.
+    onTokenRotated: (newToken) => {
+      console.log("[Agent] token rotated; store the new token now");
+      void newToken; // TODO: write newToken to your secret store
+    },
 
     onConnected: (info) => {
       console.log(`✅ Connected as ${info.agent.name}`);
@@ -420,28 +435,29 @@ async function main() {
 
   await agent.connect();
 
-  // Rotate token every 24h, if the gateway supports it. As of now
-  // POST /byoa/sse/tokens/rotate answers 501 (see BYOA.md's Token Rotation
-  // section): the gateway has no durable per-token store, so rotating here
-  // would either bypass Triologue's own revocation or just alias the same
-  // token. On the first 501, log that once and stop polling instead of
-  // logging a fresh error every 24h; a future gateway that does support
-  // rotation flows through the same interval with no changes needed here.
-  const rotationTimer = setInterval(
-    () => {
-      agent.rotateToken().catch((err) => {
-        if (err instanceof TokenRotationNotSupportedError) {
-          console.log(
-            "[Agent] token rotation not supported by this gateway; keeping the configured token"
-          );
-          clearInterval(rotationTimer);
-          return;
-        }
-        console.error(err);
-      });
-    },
-    24 * 60 * 60 * 1000
-  );
+  // Opt-in rotation: set BYOA_ROTATE_INTERVAL_HOURS (e.g. 24) to enable it.
+  // Off by default, because a rotated token only helps if it is stored: after
+  // the grace window (default 300 s) the old token is dead, so a restart that
+  // still reads process.env.BYOA_TOKEN would be locked out. Persist the new
+  // token in onTokenRotated below before relying on rotation.
+  const intervalHours = Number(process.env.BYOA_ROTATE_INTERVAL_HOURS ?? 0);
+  if (Number.isFinite(intervalHours) && intervalHours > 0) {
+    const rotationTimer = setInterval(
+      () => {
+        agent.rotateToken().catch((err) => {
+          if (err instanceof TokenRotationNotSupportedError) {
+            console.log(
+              "[Agent] token rotation not supported by this gateway; keeping the configured token"
+            );
+            clearInterval(rotationTimer);
+            return;
+          }
+          console.error(err);
+        });
+      },
+      intervalHours * 60 * 60 * 1000
+    );
+  }
 
   // Graceful shutdown
   process.on("SIGINT", () => {

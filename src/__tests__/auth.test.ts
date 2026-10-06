@@ -39,6 +39,8 @@ import {
   syncFromApi,
   loadAgents,
   buildTokenIndex,
+  authenticateCurrentToken,
+  rotateTokenUpstream,
 } from '../auth.js';
 
 // ── State reset helpers ──────────────────────────────────────────────────────
@@ -369,5 +371,177 @@ describe('loadAgents', () => {
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+
+// ── Rotation grace window ────────────────────────────────────────────────────
+
+describe('previousToken grace window', () => {
+  const T0 = Date.parse('2030-01-01T00:00:00.000Z');
+  const expires = new Date(T0 + 300_000).toISOString();
+
+  async function seedRotated(extra: Record<string, unknown> = {}) {
+    await seedAgents([
+      makeRawAgent({ token: 'byoa_new', previousToken: 'byoa_old', previousTokenExpiresAt: expires, ...extra }),
+    ]);
+  }
+
+  it('accepts the previous token before the expiry and maps it to the same agent', async () => {
+    await seedRotated();
+    expect(authenticateToken('byoa_old', T0)?.userId).toBe('user-001');
+    expect(authenticateToken('byoa_new', T0)?.userId).toBe('user-001');
+  });
+
+  it('rejects the previous token at the exact expiry instant and after', async () => {
+    await seedRotated();
+    expect(authenticateToken('byoa_old', T0 + 300_000 - 1)).not.toBeNull();
+    expect(authenticateToken('byoa_old', T0 + 300_000)).toBeNull();
+    expect(authenticateToken('byoa_old', T0 + 400_000)).toBeNull();
+  });
+
+  it('ignores a previous token with a missing, null or unparseable expiry', async () => {
+    await seedRotated({ previousTokenExpiresAt: null });
+    expect(authenticateToken('byoa_old', T0)).toBeNull();
+    await seedRotated({ previousTokenExpiresAt: 'not-a-date' });
+    expect(authenticateToken('byoa_old', T0)).toBeNull();
+    await seedRotated({ previousTokenExpiresAt: undefined });
+    expect(authenticateToken('byoa_old', T0)).toBeNull();
+  });
+
+  it('drops the previous token on the next sync that no longer reports it', async () => {
+    await seedRotated();
+    expect(authenticateToken('byoa_old', T0)).not.toBeNull();
+    await seedAgents([makeRawAgent({ token: 'byoa_new', previousToken: null, previousTokenExpiresAt: null })]);
+    expect(authenticateToken('byoa_old', T0)).toBeNull();
+  });
+
+  it('authenticateCurrentToken accepts only the current token, never the grace token', async () => {
+    await seedRotated();
+    expect(authenticateCurrentToken('byoa_new')?.userId).toBe('user-001');
+    expect(authenticateCurrentToken('byoa_old')).toBeNull();
+  });
+
+  it('pins lookup order: a current token is matched before any grace entry', async () => {
+    await seedAgents([
+      makeRawAgent({ token: 'byoa_a', userId: 'user-a', username: 'a', mentionKey: 'a', previousToken: 'byoa_b', previousTokenExpiresAt: expires }),
+      makeRawAgent({ token: 'byoa_b', userId: 'user-b', username: 'b', mentionKey: 'b' }),
+    ]);
+    expect(authenticateToken('byoa_b', T0)?.userId).toBe('user-b');
+  });
+});
+
+// ── Upstream rotate ──────────────────────────────────────────────────────────
+
+describe('rotateTokenUpstream', () => {
+  // Each test uses its own user id: the AgentToken row id is cached per agent.
+  const agentFor = (userId: string) => ({
+    id: userId, name: 'TestBot', userId, username: 'testbot', mentionKey: 'testbot',
+    webhookUrl: null, webhookSecret: null, trustLevel: 'standard' as const, emoji: '🤖', color: null,
+    connectionType: 'both' as const, receiveMode: 'mentions' as const, delivery: 'webhook' as const,
+  });
+  const ok = (body: unknown) => ({ ok: true, status: 200, json: async () => body }) as unknown as Response;
+  const fail = (status: number) => ({ ok: false, status, json: async () => ({ error: 'secret detail' }) }) as unknown as Response;
+  const ctx = (userId: string) => ok({ agent: { id: `row-${userId}`, userId } });
+  const rotated = ok({
+    agentId: 'row-1', token: 'byoa_fresh', previousTokenExpiresAt: '2030-01-01T00:05:00.000Z', graceSeconds: 300,
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  async function seedCurrent(userId: string) {
+    await seedAgents([makeRawAgent({ token: 'byoa_cur', userId })]);
+  }
+
+  it('sends the gateway token as Authorization and the current token as X-Agent-Token, then applies the new token locally', async () => {
+    await seedCurrent('user-r1');
+    const fetchMock = vi.fn().mockResolvedValueOnce(ctx('user-r1')).mockResolvedValueOnce(rotated);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const r = await rotateTokenUpstream(agentFor('user-r1'), 'byoa_cur');
+
+    expect(r).toEqual({ ok: true, token: 'byoa_fresh', previousTokenExpiresAt: '2030-01-01T00:05:00.000Z', graceSeconds: 300 });
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(String(url)).toMatch(/\/api\/agents\/row-user-r1\/token\/rotate$/);
+    expect(init.method).toBe('POST');
+    expect(init.headers['X-Agent-Token']).toBe('byoa_cur');
+    expect(init.headers.Authorization).toMatch(/^Bearer /);
+    expect(authenticateCurrentToken('byoa_fresh')?.userId).toBe('user-r1');
+    expect(authenticateCurrentToken('byoa_cur')).toBeNull();
+    expect(authenticateToken('byoa_cur', Date.parse('2030-01-01T00:00:00.000Z'))?.userId).toBe('user-r1');
+  });
+
+  it.each([[403, 'forbidden'], [404, 'agent_not_found'], [409, 'rotation_conflict'], [500, 'upstream_error']])(
+    'maps upstream %i to a fixed code without echoing the body',
+    async (status, code) => {
+      const uid = `user-s${status}`;
+      await seedCurrent(uid);
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(ctx(uid)).mockResolvedValueOnce(fail(status)));
+      const r = await rotateTokenUpstream(agentFor(uid), 'byoa_cur');
+      expect(r.ok).toBe(false);
+      if (!r.ok) {
+        expect(r.error).toBe(code);
+        expect(r.status).toBe(status === 500 ? 502 : status);
+        expect(JSON.stringify(r)).not.toContain('secret detail');
+      }
+    },
+  );
+
+  it('rejects an upstream token without the byoa_ prefix and leaves the token unchanged', async () => {
+    await seedCurrent('user-m1');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(ctx('user-m1')).mockResolvedValueOnce(ok({ token: 'not-byoa', previousTokenExpiresAt: '2030-01-01T00:05:00.000Z' })));
+    const r = await rotateTokenUpstream(agentFor('user-m1'), 'byoa_cur');
+    expect(r).toMatchObject({ ok: false, status: 502 });
+    expect(authenticateCurrentToken('byoa_cur')?.userId).toBe('user-m1');
+    expect(authenticateCurrentToken('not-byoa')).toBeNull();
+  });
+
+  it('rejects a valid upstream token with an invalid expiry date and leaves the token unchanged', async () => {
+    await seedCurrent('user-m2');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(ctx('user-m2')).mockResolvedValueOnce(ok({ token: 'byoa_fresh', previousTokenExpiresAt: 'x' })));
+    const r = await rotateTokenUpstream(agentFor('user-m2'), 'byoa_cur');
+    expect(r).toMatchObject({ ok: false, status: 502 });
+    expect(authenticateCurrentToken('byoa_cur')?.userId).toBe('user-m2');
+    expect(authenticateCurrentToken('byoa_fresh')).toBeNull();
+  });
+
+  it('answers 502 and posts no rotate request when /me/context reports a different user', async () => {
+    await seedCurrent('user-x1');
+    const fetchMock = vi.fn().mockResolvedValueOnce(ok({ agent: { id: 'row-other', userId: 'someone-else' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const r = await rotateTokenUpstream(agentFor('user-x1'), 'byoa_cur');
+    expect(r).toMatchObject({ ok: false, status: 502 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(authenticateCurrentToken('byoa_cur')?.userId).toBe('user-x1');
+  });
+
+  it('caches the agent row id: a second rotation skips /me/context and posts to the cached id', async () => {
+    await seedCurrent('user-c1');
+    const first = ok({ agentId: 'row-user-c1', token: 'byoa_second', previousTokenExpiresAt: '2030-01-01T00:05:00.000Z', graceSeconds: 300 });
+    const second = ok({ agentId: 'row-user-c1', token: 'byoa_third', previousTokenExpiresAt: '2030-01-01T00:10:00.000Z', graceSeconds: 300 });
+    const fetchMock = vi.fn().mockResolvedValueOnce(ctx('user-c1')).mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await rotateTokenUpstream(agentFor('user-c1'), 'byoa_cur')).toMatchObject({ ok: true, token: 'byoa_second' });
+    expect(await rotateTokenUpstream(agentFor('user-c1'), 'byoa_second')).toMatchObject({ ok: true, token: 'byoa_third' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const urls = fetchMock.mock.calls.map(c => String(c[0]));
+    expect(urls.filter(u => u.endsWith('/api/agents/me/context'))).toHaveLength(1);
+    expect(urls[2]).toMatch(/\/api\/agents\/row-user-c1\/token\/rotate$/);
+  });
+
+  it('returns 502 when the agent row id cannot be resolved', async () => {
+    await seedCurrent('user-n1');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fail(401)));
+    const r = await rotateTokenUpstream(agentFor('user-n1'), 'byoa_cur');
+    expect(r).toMatchObject({ ok: false, status: 502 });
+  });
+
+  it('returns 502 when fetch throws', async () => {
+    await seedCurrent('user-t1');
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('boom')));
+    const r = await rotateTokenUpstream(agentFor('user-t1'), 'byoa_cur');
+    expect(r).toMatchObject({ ok: false, status: 502 });
   });
 });
