@@ -19,6 +19,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `gateway-config`: the replaced token authenticates until the expiry
   instant, then stops. Requires a Triologue release with the rotate route.
 
+- `POST /byoa/sse/tokens/rotate` is rate limited per agent (5 per rolling hour,
+  separate from the message limit): `429 RATE_LIMITED` with `Retry-After`
+  and `X-RateLimit-*` headers (task 5fd44fb3).
+
+### Fixed
+
+- `Retry-After` on a `429` (message and rotate limiters) is never `0`: it is
+  at least 1 second, also at the exact window edge (task 5fd44fb3).
+- A `404` from Triologue's rotate route now drops the cached AgentToken row
+  id, so the next attempt re-resolves it through `/me/context` instead of
+  failing until a restart (task 5fd44fb3).
+- `examples/sse-client.ts`: `BYOA_ROTATE_INTERVAL_HOURS` above the
+  `setInterval` limit (about 596 hours) is clamped with a warning instead of
+  overflowing into a 1 ms rotate loop (task 5fd44fb3).
+
 ### Changed
 
 - `examples/sse-client.ts`: rotation is now opt-in (`BYOA_ROTATE_INTERVAL_HOURS`,

@@ -288,9 +288,12 @@ The response is sent with `Cache-Control: no-store`. Store the new token before 
 | 403 | `forbidden` | Triologue refused the rotation (agent no longer active, token no longer current, or the gateway's own token is inactive) |
 | 404 | `agent_not_found` | Triologue does not know the agent |
 | 409 | `rotation_conflict` | Another rotation won; retry with the token you now hold |
+| 429 | `RATE_LIMITED` | More than 5 rotations in an hour for this agent; wait `Retry-After` seconds (also in the body as `retryAfter`) |
 | 502 | `upstream_unavailable`, `upstream_error`, `upstream_invalid_response` | Triologue unreachable or answered unexpectedly; the current token is unchanged |
 
-**Deployment notes:** the gateway needs `GATEWAY_TOKEN` of an active gateway user (it authenticates the rotate call to Triologue) and a Triologue release that ships the rotate route. To find the agent's record it calls `GET /api/agents/me/context` with the agent's own current token once per agent and caches the record id.
+**Rate limit:** each agent may rotate 5 times per rolling hour, independent of the message limit. A 429 carries `Retry-After` (seconds) and `X-RateLimit-Limit`/`-Remaining`. Only a call that presents the current token counts, so a leaked grace-window token cannot use up the budget.
+
+**Deployment notes:** the gateway needs `GATEWAY_TOKEN` of an active gateway user (it authenticates the rotate call to Triologue) and a Triologue release that ships the rotate route. To find the agent's record it calls `GET /api/agents/me/context` with the agent's own current token once per agent and caches the record id; if Triologue answers 404 for that id (the record was replaced), the cache entry is dropped and the next attempt looks it up again.
 
 ---
 

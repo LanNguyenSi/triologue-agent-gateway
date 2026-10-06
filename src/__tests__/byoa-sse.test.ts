@@ -25,6 +25,8 @@
  *   → the rate-limiting test fails.
  *   M-rotate-auth-order: answer /tokens/rotate before authenticateSSE
  *   rejects an invalid/missing token → the 401 tests fail.
+ *   M-rotate-limit: drop the per-agent rotate limiter → the 429 rotate test
+ *   fails.
  *   M-rotate-current-check: drop the current-token check in the rotate
  *   route → the stale-token test fails.
  */
@@ -592,6 +594,109 @@ describe('POST /tokens/rotate', () => {
     });
     expect(headers['cache-control']).toBe('no-store');
     expect(rotateTokenUpstreamMock).toHaveBeenCalledWith(fakeAgent, 'cur-token');
+  });
+
+  describe('rotate rate limit (controlled clock)', () => {
+    const T0 = 1_800_000_000_000;
+    const WINDOW_S = 3600;
+    const rotated = {
+      ok: true,
+      token: 'byoa_new_token',
+      previousTokenExpiresAt: '2030-01-01T00:00:00.000Z',
+      graceSeconds: 300,
+    };
+    let now = T0;
+
+    function agentWith(id: string, token: string): AgentInfo {
+      const a: AgentInfo = { ...fakeAgent, id, userId: id };
+      authenticateTokenMock.mockImplementation((t) => (t === token ? a : null));
+      authenticateCurrentTokenMock.mockImplementation((t) => (t === token ? a : null));
+      return a;
+    }
+
+    beforeEach(() => {
+      now = T0;
+      vi.spyOn(Date, 'now').mockImplementation(() => now);
+      rotateTokenUpstreamMock.mockResolvedValue(rotated);
+    });
+
+    it('counts X-RateLimit-Remaining down 4..0 on allowed calls', async () => {
+      agentWith('user-rot-count', 'count-token');
+      for (const expected of ['4', '3', '2', '1', '0']) {
+        const r = await postJSON('/byoa/sse/tokens/rotate', 'count-token', {});
+        expect(r.status).toBe(200);
+        expect(r.headers['x-ratelimit-limit']).toBe('5');
+        expect(r.headers['x-ratelimit-remaining']).toBe(expected);
+      }
+    });
+
+    it('answers 429 with the exact Retry-After, which shrinks with time, and recovers once the window passes; other agents are unaffected', async () => {
+      agentWith('user-rot-heavy', 'heavy-token');
+      for (let i = 0; i < 5; i++) {
+        expect((await postJSON('/byoa/sse/tokens/rotate', 'heavy-token', {})).status).toBe(200);
+      }
+      const callsBefore = rotateTokenUpstreamMock.mock.calls.length;
+
+      const limited = await postJSON('/byoa/sse/tokens/rotate', 'heavy-token', {});
+      expect(limited.status).toBe(429);
+      expect(limited.body.error).toBe('RATE_LIMITED');
+      expect(limited.body.token).toBeUndefined();
+      expect(limited.headers['retry-after']).toBe(String(WINDOW_S));
+      expect(limited.body.retryAfter).toBe(WINDOW_S);
+      expect(limited.headers['x-ratelimit-limit']).toBe('5');
+      expect(limited.headers['x-ratelimit-remaining']).toBe('0');
+      // The limited call never reaches Triologue.
+      expect(rotateTokenUpstreamMock.mock.calls.length).toBe(callsBefore);
+
+      now = T0 + 600_000;
+      const later = await postJSON('/byoa/sse/tokens/rotate', 'heavy-token', {});
+      expect(later.status).toBe(429);
+      expect(later.headers['retry-after']).toBe(String(WINDOW_S - 600));
+
+      now = T0 + 600_700; // 2999.3 s left: rounds up, never down or to nearest
+      const fractional = await postJSON('/byoa/sse/tokens/rotate', 'heavy-token', {});
+      expect(fractional.status).toBe(429);
+      expect(fractional.headers['retry-after']).toBe(String(WINDOW_S - 600));
+
+      now = T0 + 3_599_500; // 0.5 s left, rounds up to 1
+      const nearEnd = await postJSON('/byoa/sse/tokens/rotate', 'heavy-token', {});
+      expect(nearEnd.status).toBe(429);
+      expect(nearEnd.headers['retry-after']).toBe('1');
+
+      now = T0 + 3_600_001; // the first entry has left the window
+      expect((await postJSON('/byoa/sse/tokens/rotate', 'heavy-token', {})).status).toBe(200);
+
+      agentWith('user-rot-light', 'light-token');
+      expect((await postJSON('/byoa/sse/tokens/rotate', 'light-token', {})).status).toBe(200);
+    });
+
+    it('never answers Retry-After 0: exactly at the window edge the call is still limited and asks for 1 second', async () => {
+      agentWith('user-rot-edge', 'edge-token');
+      for (let i = 0; i < 5; i++) {
+        expect((await postJSON('/byoa/sse/tokens/rotate', 'edge-token', {})).status).toBe(200);
+      }
+      now = T0 + 3_600_000; // oldest entry is exactly one window old: not yet evicted
+      const edge = await postJSON('/byoa/sse/tokens/rotate', 'edge-token', {});
+      expect(edge.status).toBe(429);
+      expect(edge.headers['retry-after']).toBe('1');
+      expect(edge.body.retryAfter).toBe(1);
+    });
+
+    it('does not spend budget on stale (grace window) token calls', async () => {
+      const a = agentWith('user-rot-stale', 'cur-token');
+      // 'old-token' authenticates (grace window) but is not the current token.
+      authenticateTokenMock.mockImplementation((t) => (t === 'cur-token' || t === 'old-token' ? a : null));
+      authenticateCurrentTokenMock.mockImplementation((t) => (t === 'cur-token' ? a : null));
+
+      for (let i = 0; i < 7; i++) {
+        const r = await postJSON('/byoa/sse/tokens/rotate', 'old-token', {});
+        expect(r.status).toBe(403);
+        expect(r.body.error).toBe('stale_token');
+      }
+      const r = await postJSON('/byoa/sse/tokens/rotate', 'cur-token', {});
+      expect(r.status).toBe(200);
+      expect(r.headers['x-ratelimit-remaining']).toBe('4');
+    });
   });
 
   it('maps an upstream failure to its status with a fixed error code only', async () => {

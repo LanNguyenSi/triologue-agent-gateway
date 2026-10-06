@@ -24,6 +24,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   TriologueAgent,
   TokenRotationNotSupportedError,
+  parseRotateIntervalMs,
+  MAX_TIMER_MS,
 } from './sse-client.js';
 
 function makeAgent(token = 'byoa_test_token') {
@@ -132,5 +134,32 @@ describe('TriologueAgent.rotateToken() - 200 and stale_token flow', () => {
     expect(err).not.toBeInstanceOf(TokenRotationNotSupportedError);
     expect((err as Error).message).toBe('Token rotation failed: 403');
     expect(onTokenRotated).not.toHaveBeenCalled();
+  });
+});
+
+describe('parseRotateIntervalMs()', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('disables rotation for unset, zero, negative and non-numeric values', () => {
+    for (const raw of [undefined, '', '0', '-5', 'abc', 'Infinity']) {
+      expect(parseRotateIntervalMs(raw)).toBeNull();
+    }
+  });
+
+  it('converts hours to milliseconds below the timer limit', () => {
+    expect(parseRotateIntervalMs('24')).toBe(24 * 3_600_000);
+    expect(parseRotateIntervalMs('0.5')).toBe(1_800_000);
+  });
+
+  it('clamps a value above the setInterval limit instead of overflowing, and warns', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // 600 h = 2.16e9 ms > 2^31-1, which setInterval would turn into a 1 ms loop.
+    expect(parseRotateIntervalMs('600')).toBe(MAX_TIMER_MS);
+    expect(parseRotateIntervalMs('1000000')).toBe(MAX_TIMER_MS);
+    expect(warn).toHaveBeenCalled();
+    // Exactly at the limit is not clamped, so it must not warn.
+    warn.mockClear();
+    expect(parseRotateIntervalMs(String(MAX_TIMER_MS / 3_600_000))).toBe(MAX_TIMER_MS);
+    expect(warn).not.toHaveBeenCalled();
   });
 });

@@ -531,6 +531,48 @@ describe('rotateTokenUpstream', () => {
     expect(urls[2]).toMatch(/\/api\/agents\/row-user-c1\/token\/rotate$/);
   });
 
+  it('drops the cached row id on an upstream 404 so the retry re-resolves via /me/context and succeeds', async () => {
+    await seedCurrent('user-k1');
+    const stale = ok({ agentId: 'row-user-k1', token: 'byoa_second', previousTokenExpiresAt: '2030-01-01T00:05:00.000Z', graceSeconds: 300 });
+    const fresh = ok({ agentId: 'row-new', token: 'byoa_third', previousTokenExpiresAt: '2030-01-01T00:10:00.000Z', graceSeconds: 300 });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(ctx('user-k1'))      // resolve row id
+      .mockResolvedValueOnce(stale)               // first rotation succeeds, id cached
+      .mockResolvedValueOnce(fail(404))           // row replaced upstream
+      .mockResolvedValueOnce(ok({ agent: { id: 'row-new', userId: 'user-k1' } })) // re-resolve
+      .mockResolvedValueOnce(fresh);
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await rotateTokenUpstream(agentFor('user-k1'), 'byoa_cur')).toMatchObject({ ok: true });
+    expect(await rotateTokenUpstream(agentFor('user-k1'), 'byoa_second')).toMatchObject({ ok: false, status: 404 });
+    expect(await rotateTokenUpstream(agentFor('user-k1'), 'byoa_second')).toMatchObject({ ok: true, token: 'byoa_third' });
+
+    const urls = fetchMock.mock.calls.map(c => String(c[0]));
+    expect(urls.filter(u => u.endsWith('/api/agents/me/context'))).toHaveLength(2);
+    expect(urls[4]).toMatch(/\/api\/agents\/row-new\/token\/rotate$/);
+  });
+
+  it('keeps the cached row id on an upstream 409: the next attempt does not re-resolve via /me/context', async () => {
+    await seedCurrent('user-k2');
+    const second = ok({ agentId: 'row-user-k2', token: 'byoa_second', previousTokenExpiresAt: '2030-01-01T00:05:00.000Z', graceSeconds: 300 });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(ctx('user-k2'))      // resolve row id
+      .mockResolvedValueOnce(fail(409))           // lost the compare-and-swap
+      .mockResolvedValueOnce(second);
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await rotateTokenUpstreamHelper()).toMatchObject({ ok: false, status: 409 });
+    expect(await rotateTokenUpstreamHelper()).toMatchObject({ ok: true, token: 'byoa_second' });
+
+    const urls = fetchMock.mock.calls.map(c => String(c[0]));
+    expect(urls.filter(u => u.endsWith('/api/agents/me/context'))).toHaveLength(1);
+    expect(urls[2]).toMatch(/\/api\/agents\/row-user-k2\/token\/rotate$/);
+
+    function rotateTokenUpstreamHelper() {
+      return rotateTokenUpstream(agentFor('user-k2'), 'byoa_cur');
+    }
+  });
+
   it('returns 502 when the agent row id cannot be resolved', async () => {
     await seedCurrent('user-n1');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(fail(401)));
