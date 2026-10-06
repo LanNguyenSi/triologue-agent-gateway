@@ -236,7 +236,13 @@ export async function rotateTokenUpstream(agent: AgentInfo, currentToken: string
       },
     );
     if (res.status === 403) return { ok: false, status: 403, error: 'forbidden' };
-    if (res.status === 404) return { ok: false, status: 404, error: 'agent_not_found' };
+    if (res.status === 404) {
+      // The cached row id may point at a replaced AgentToken row: forget it so
+      // the next attempt re-resolves through /me/context instead of 404-ing
+      // until the gateway restarts.
+      agentTokenIdCache.delete(agent.userId);
+      return { ok: false, status: 404, error: 'agent_not_found' };
+    }
     if (res.status === 409) return { ok: false, status: 409, error: 'rotation_conflict' };
     if (!res.ok) return { ok: false, status: 502, error: 'upstream_error' };
 

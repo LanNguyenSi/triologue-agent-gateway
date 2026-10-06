@@ -25,6 +25,8 @@
  *   → the rate-limiting test fails.
  *   M-rotate-auth-order: answer /tokens/rotate before authenticateSSE
  *   rejects an invalid/missing token → the 401 tests fail.
+ *   M-rotate-limit: drop the per-agent rotate limiter → the 429 rotate test
+ *   fails.
  *   M-rotate-current-check: drop the current-token check in the rotate
  *   route → the stale-token test fails.
  */
@@ -592,6 +594,39 @@ describe('POST /tokens/rotate', () => {
     });
     expect(headers['cache-control']).toBe('no-store');
     expect(rotateTokenUpstreamMock).toHaveBeenCalledWith(fakeAgent, 'cur-token');
+  });
+
+  it('answers 429 with Retry-After once the per-agent rotate budget is spent, without touching other agents', async () => {
+    const heavy: AgentInfo = { ...fakeAgent, id: 'user-rot-heavy', userId: 'user-rot-heavy' };
+    const light: AgentInfo = { ...fakeAgent, id: 'user-rot-light', userId: 'user-rot-light' };
+    authenticateTokenMock.mockImplementation((t) => (t === 'heavy-token' ? heavy : t === 'light-token' ? light : null));
+    authenticateCurrentTokenMock.mockImplementation((t) => (t === 'heavy-token' ? heavy : t === 'light-token' ? light : null));
+    rotateTokenUpstreamMock.mockResolvedValue({
+      ok: true,
+      token: 'byoa_new_token',
+      previousTokenExpiresAt: '2030-01-01T00:00:00.000Z',
+      graceSeconds: 300,
+    });
+
+    for (let i = 0; i < 5; i++) {
+      const r = await postJSON('/byoa/sse/tokens/rotate', 'heavy-token', {});
+      expect(r.status).toBe(200);
+    }
+    const callsBefore = rotateTokenUpstreamMock.mock.calls.length;
+
+    const { status, headers, body } = await postJSON('/byoa/sse/tokens/rotate', 'heavy-token', {});
+    expect(status).toBe(429);
+    expect(body.error).toBe('RATE_LIMITED');
+    expect(body.token).toBeUndefined();
+    expect(Number(headers['retry-after'])).toBeGreaterThan(0);
+    expect(Number(headers['retry-after'])).toBe(body.retryAfter);
+    expect(headers['x-ratelimit-limit']).toBe('5');
+    expect(headers['x-ratelimit-remaining']).toBe('0');
+    // The limited call never reaches Triologue.
+    expect(rotateTokenUpstreamMock.mock.calls.length).toBe(callsBefore);
+
+    const other = await postJSON('/byoa/sse/tokens/rotate', 'light-token', {});
+    expect(other.status).toBe(200);
   });
 
   it('maps an upstream failure to its status with a fixed error code only', async () => {

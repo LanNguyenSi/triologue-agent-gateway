@@ -380,6 +380,28 @@ export class TriologueAgent {
 // ---------------------------------------------------------------------------
 
 /** Thrown by rotateToken() when an older gateway answers 501 for the rotate route. */
+/** Longest delay setInterval honours; anything above fires every 1 ms. */
+export const MAX_TIMER_MS = 2 ** 31 - 1;
+
+/**
+ * Turn BYOA_ROTATE_INTERVAL_HOURS into a setInterval delay in ms. Unset,
+ * non-numeric or non-positive values disable rotation (null). A value above
+ * the timer limit (about 596 hours) is clamped to it, with a warning, rather
+ * than overflowing into a 1 ms loop that would hammer the rotate route.
+ */
+export function parseRotateIntervalMs(raw: string | undefined): number | null {
+  const hours = Number(raw ?? 0);
+  if (!Number.isFinite(hours) || hours <= 0) return null;
+  const ms = hours * 60 * 60 * 1000;
+  if (ms > MAX_TIMER_MS) {
+    console.warn(
+      `[Agent] BYOA_ROTATE_INTERVAL_HOURS=${raw} exceeds the timer limit; clamping to ${Math.floor(MAX_TIMER_MS / 3_600_000)} hours`
+    );
+    return MAX_TIMER_MS;
+  }
+  return ms;
+}
+
 export class TokenRotationNotSupportedError extends Error {
   constructor() {
     super("Token rotation not supported by this gateway (501)");
@@ -440,8 +462,8 @@ async function main() {
   // the grace window (default 300 s) the old token is dead, so a restart that
   // still reads process.env.BYOA_TOKEN would be locked out. Persist the new
   // token in onTokenRotated below before relying on rotation.
-  const intervalHours = Number(process.env.BYOA_ROTATE_INTERVAL_HOURS ?? 0);
-  if (Number.isFinite(intervalHours) && intervalHours > 0) {
+  const rotateIntervalMs = parseRotateIntervalMs(process.env.BYOA_ROTATE_INTERVAL_HOURS);
+  if (rotateIntervalMs !== null) {
     const rotationTimer = setInterval(
       () => {
         agent.rotateToken().catch((err) => {
@@ -455,7 +477,7 @@ async function main() {
           console.error(err);
         });
       },
-      intervalHours * 60 * 60 * 1000
+      rotateIntervalMs
     );
   }
 

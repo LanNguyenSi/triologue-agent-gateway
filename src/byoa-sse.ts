@@ -59,6 +59,15 @@ interface AgentMessage {
 
 const sseClients = new Map<string, SSEClient[]>(); // agentId → clients
 const rateLimits = new Map<string, number[]>(); // agentId → timestamps
+const rotateRateLimits = new Map<string, number[]>(); // agentId → rotate timestamps
+
+// Rotation is a rare, deliberate operation (each call costs upstream requests,
+// a compare-and-swap and an audit event), so its budget is far below the
+// message budget: 5 per hour per agent leaves room for retries after a 409 or
+// 502 while capping churn. Kept apart from the message limiter so rotation
+// never eats message budget and vice versa.
+const ROTATE_WINDOW_MS = 60 * 60_000;
+const ROTATE_MAX_REQUESTS = 5;
 
 // ── Router ──
 
@@ -260,6 +269,16 @@ sseRouter.post('/tokens/rotate', authenticateSSE, async (req: Request, res: Resp
     });
   }
 
+  // After the current-token check, so a leaked grace-window token cannot burn
+  // the agent's rotate budget.
+  const limit = consumeWindow(rotateRateLimits, agent.userId, Date.now(), ROTATE_WINDOW_MS, ROTATE_MAX_REQUESTS);
+  res.set('X-RateLimit-Limit', String(ROTATE_MAX_REQUESTS));
+  res.set('X-RateLimit-Remaining', String(limit.remaining));
+  if (!limit.allowed) {
+    res.set('Retry-After', String(limit.retryAfter));
+    return res.status(429).json({ error: 'RATE_LIMITED', retryAfter: limit.retryAfter });
+  }
+
   const result = await rotateTokenUpstream(current, token);
   if (!result.ok) {
     return res.status(result.status).json({ error: result.error });
@@ -307,14 +326,20 @@ function formatSSE(id: number, event: string, data: any): string {
   return `${idLine}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
-function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
-  const agent: AgentInfo = (req as any).agent;
-  const now = Date.now();
-  const windowMs = 60_000; // 1 minute
-  const maxRequests = agent.trustLevel === 'elevated' ? 30 : 10;
-
-  if (!rateLimits.has(agent.userId)) rateLimits.set(agent.userId, []);
-  const timestamps = rateLimits.get(agent.userId)!;
+/**
+ * Sliding-window counter shared by the message and rotate limiters. Records
+ * the call when allowed; when not, reports the seconds until the oldest
+ * entry leaves the window.
+ */
+function consumeWindow(
+  store: Map<string, number[]>,
+  key: string,
+  now: number,
+  windowMs: number,
+  maxRequests: number,
+): { allowed: boolean; retryAfter: number; remaining: number } {
+  if (!store.has(key)) store.set(key, []);
+  const timestamps = store.get(key)!;
 
   // Remove old entries
   while (timestamps.length > 0 && timestamps[0] < now - windowMs) {
@@ -322,21 +347,29 @@ function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
   }
 
   if (timestamps.length >= maxRequests) {
-    const retryAfter = Math.ceil((timestamps[0] + windowMs - now) / 1000);
-    res.set('Retry-After', String(retryAfter));
-    res.set('X-RateLimit-Limit', String(maxRequests));
-    res.set('X-RateLimit-Remaining', '0');
-    return res.status(429).json({
-      error: 'RATE_LIMITED',
-      retryAfter,
-    });
+    return { allowed: false, retryAfter: Math.ceil((timestamps[0] + windowMs - now) / 1000), remaining: 0 };
   }
 
   timestamps.push(now);
+  return { allowed: true, retryAfter: 0, remaining: maxRequests - timestamps.length };
+}
 
-  // Set rate limit headers
+function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
+  const agent: AgentInfo = (req as any).agent;
+  const windowMs = 60_000; // 1 minute
+  const maxRequests = agent.trustLevel === 'elevated' ? 30 : 10;
+
+  const limit = consumeWindow(rateLimits, agent.userId, Date.now(), windowMs, maxRequests);
   res.set('X-RateLimit-Limit', String(maxRequests));
-  res.set('X-RateLimit-Remaining', String(maxRequests - timestamps.length));
+  res.set('X-RateLimit-Remaining', String(limit.remaining));
+
+  if (!limit.allowed) {
+    res.set('Retry-After', String(limit.retryAfter));
+    return res.status(429).json({
+      error: 'RATE_LIMITED',
+      retryAfter: limit.retryAfter,
+    });
+  }
   next();
 }
 
