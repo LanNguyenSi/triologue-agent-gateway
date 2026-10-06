@@ -157,7 +157,9 @@ describe('parseRotateIntervalMs()', () => {
     expect(parseRotateIntervalMs('600')).toBe(MAX_TIMER_MS);
     expect(parseRotateIntervalMs('1000000')).toBe(MAX_TIMER_MS);
     expect(warn).toHaveBeenCalled();
-    // Exactly at the limit is not clamped.
+    // Exactly at the limit is not clamped, so it must not warn.
+    warn.mockClear();
     expect(parseRotateIntervalMs(String(MAX_TIMER_MS / 3_600_000))).toBe(MAX_TIMER_MS);
+    expect(warn).not.toHaveBeenCalled();
   });
 });

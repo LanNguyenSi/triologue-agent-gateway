@@ -329,7 +329,7 @@ function formatSSE(id: number, event: string, data: any): string {
 /**
  * Sliding-window counter shared by the message and rotate limiters. Records
  * the call when allowed; when not, reports the seconds until the oldest
- * entry leaves the window.
+ * entry leaves the window (never less than 1 second).
  */
 function consumeWindow(
   store: Map<string, number[]>,
@@ -347,7 +347,7 @@ function consumeWindow(
   }
 
   if (timestamps.length >= maxRequests) {
-    return { allowed: false, retryAfter: Math.ceil((timestamps[0] + windowMs - now) / 1000), remaining: 0 };
+    return { allowed: false, retryAfter: Math.max(1, Math.ceil((timestamps[0] + windowMs - now) / 1000)), remaining: 0 };
   }
 
   timestamps.push(now);

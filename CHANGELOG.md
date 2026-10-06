@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `Retry-After` on a `429` (message and rotate limiters) is never `0`: it is
+  at least 1 second, also at the exact window edge (task 5fd44fb3).
 - A `404` from Triologue's rotate route now drops the cached AgentToken row
   id, so the next attempt re-resolves it through `/me/context` instead of
   failing until a restart (task 5fd44fb3).

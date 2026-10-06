@@ -379,7 +379,6 @@ export class TriologueAgent {
 // Helper
 // ---------------------------------------------------------------------------
 
-/** Thrown by rotateToken() when an older gateway answers 501 for the rotate route. */
 /** Longest delay setInterval honours; anything above fires every 1 ms. */
 export const MAX_TIMER_MS = 2 ** 31 - 1;
 
@@ -402,6 +401,7 @@ export function parseRotateIntervalMs(raw: string | undefined): number | null {
   return ms;
 }
 
+/** Thrown by rotateToken() when an older gateway answers 501 for the rotate route. */
 export class TokenRotationNotSupportedError extends Error {
   constructor() {
     super("Token rotation not supported by this gateway (501)");
