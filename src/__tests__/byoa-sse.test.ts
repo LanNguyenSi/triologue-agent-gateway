@@ -653,6 +653,11 @@ describe('POST /tokens/rotate', () => {
       expect(later.status).toBe(429);
       expect(later.headers['retry-after']).toBe(String(WINDOW_S - 600));
 
+      now = T0 + 600_700; // 2999.3 s left: rounds up, never down or to nearest
+      const fractional = await postJSON('/byoa/sse/tokens/rotate', 'heavy-token', {});
+      expect(fractional.status).toBe(429);
+      expect(fractional.headers['retry-after']).toBe(String(WINDOW_S - 600));
+
       now = T0 + 3_599_500; // 0.5 s left, rounds up to 1
       const nearEnd = await postJSON('/byoa/sse/tokens/rotate', 'heavy-token', {});
       expect(nearEnd.status).toBe(429);
