@@ -178,6 +178,7 @@ export function authenticateCurrentToken(token: string): AgentInfo | null {
  * dead at and after the expiry instant, matching Triologue).
  */
 export function authenticateToken(token: string, now: number = Date.now()): AgentInfo | null {
+  // Current before grace: defence in depth, buildTokenIndex already never stores a current token as a grace entry.
   const current = tokenMap.get(token);
   if (current) return current;
   const prev = previousTokenMap.get(token);

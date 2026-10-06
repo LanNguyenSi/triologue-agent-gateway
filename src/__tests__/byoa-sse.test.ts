@@ -523,7 +523,7 @@ describe('rate limiting (429)', () => {
 });
 
 describe('POST /tokens/rotate', () => {
-  it('returns 401 without a body when the Authorization header is missing (MUTATION GUARD: auth runs before the 501 answer)', async () => {
+  it('returns 401 without a body when the Authorization header is missing (MUTATION GUARD: auth runs before any rotate handling)', async () => {
     const status = await new Promise<number>((resolve, reject) => {
       const req = http.request(
         { hostname: '127.0.0.1', port, path: '/byoa/sse/tokens/rotate', method: 'POST' },
@@ -535,7 +535,7 @@ describe('POST /tokens/rotate', () => {
     expect(status).toBe(401);
   });
 
-  it('returns 401 for an invalid token, never reaching the 501 answer', async () => {
+  it('returns 401 for an invalid token, before any rotate handling', async () => {
     authenticateTokenMock.mockReturnValue(null);
     const { status } = await postJSON('/byoa/sse/tokens/rotate', 'bad-token', {});
     expect(status).toBe(401);

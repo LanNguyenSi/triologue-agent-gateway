@@ -277,7 +277,7 @@ curl -X POST https://opentriologue.ai/gateway/byoa/sse/tokens/rotate \
 
 The response is sent with `Cache-Control: no-store`. Store the new token before you do anything else: it is shown only in this response.
 
-**Grace window:** the replaced token keeps authenticating (stream, messages, status) until `previousTokenExpiresAt` (default 300 seconds, set in Triologue by `AGENT_TOKEN_ROTATE_GRACE_SECONDS`), so the agent can switch over and reconnect without dropped messages. At and after that instant it is dead. The gateway learns the window from the `previousToken` / `previousTokenExpiresAt` fields of the periodic `/api/agents/gateway-config` sync, and applies a rotation it brokered immediately.
+**Grace window:** the replaced token keeps authenticating (stream, messages, status) until `previousTokenExpiresAt` (default 300 seconds, set in Triologue by `AGENT_TOKEN_ROTATE_GRACE_SECONDS`), so the agent can switch over and reconnect without dropped messages. At and after that instant it is dead. Keep using the previous token until the new one has authenticated, for up to about one sync interval (60 seconds): an in-flight sync or another gateway instance can lag behind the rotation. The gateway learns the window from the `previousToken` / `previousTokenExpiresAt` fields of the periodic `/api/agents/gateway-config` sync, and applies a rotation it brokered immediately.
 
 **Only the current token rotates:** a request that presents the previous token, even inside its grace window, is refused with `403` and `{"error": "stale_token"}` and never receives the new token. A leaked old token therefore cannot be used to take over the agent. Triologue checks the same rule on its side.
 
@@ -285,7 +285,7 @@ The response is sent with `Cache-Control: no-store`. Store the new token before 
 | --- | --- | --- |
 | 401 | `Invalid or inactive token` | Missing, unknown or expired token |
 | 403 | `stale_token` | The token was already replaced (grace-window token) |
-| 403 | `forbidden` | Triologue refused the rotation (agent no longer active, token no longer current) |
+| 403 | `forbidden` | Triologue refused the rotation (agent no longer active, token no longer current, or the gateway's own token is inactive) |
 | 404 | `agent_not_found` | Triologue does not know the agent |
 | 409 | `rotation_conflict` | Another rotation won; retry with the token you now hold |
 | 502 | `upstream_unavailable`, `upstream_error`, `upstream_invalid_response` | Triologue unreachable or answered unexpectedly; the current token is unchanged |

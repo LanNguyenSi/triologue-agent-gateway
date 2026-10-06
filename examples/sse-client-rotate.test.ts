@@ -1,12 +1,14 @@
 /**
- * Tests for examples/sse-client.ts's TriologueAgent.rotateToken() 501
- * handling.
+ * Tests for examples/sse-client.ts's TriologueAgent.rotateToken().
  *
- * The gateway's POST /byoa/sse/tokens/rotate route currently answers 501
- * (see src/byoa-sse.ts and BYOA.md's Token Rotation section): the gateway
- * has no durable per-token store, so rotateToken() must surface that as
- * TokenRotationNotSupportedError instead of trying to read a `token` field
- * off a body that has none.
+ * The gateway's POST /byoa/sse/tokens/rotate route answers 200 with the new
+ * token for the current token and 403 `stale_token` for an already replaced
+ * one (see BYOA.md's Token Rotation section). rotateToken() hands a 200's
+ * token to onTokenRotated so the caller can persist it, and surfaces a 403 as
+ * a plain error without touching the configured token. The 501 handling below
+ * only covers older gateways that predate upstream-backed rotation: there
+ * rotateToken() must throw TokenRotationNotSupportedError instead of reading
+ * a `token` field off a body that has none.
  *
  * Importing examples/sse-client.ts must not run main() (it reads
  * process.env.BYOA_TOKEN! and connects to a real gateway) - the module's
@@ -80,5 +82,55 @@ describe('TriologueAgent.rotateToken() - 501 handling', () => {
     expect(caught).toBeInstanceOf(Error);
     expect(caught).not.toBeInstanceOf(TokenRotationNotSupportedError);
     expect((caught as Error).message).toBe('Token rotation failed: 500');
+  });
+});
+
+describe('TriologueAgent.rotateToken() - 200 and stale_token flow', () => {
+  it('passes the new token to onTokenRotated on a 200 and reconnects with it', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ token: 'byoa_new', previousTokenExpiresAt: '2030-01-01T00:05:00.000Z', graceSeconds: 300 }),
+      } as unknown as Response)
+      // The reconnect's stream request: answer 401 so connect() returns at once.
+      .mockResolvedValueOnce({ ok: false, status: 401 } as unknown as Response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const stored: string[] = [];
+    const agent = new TriologueAgent({
+      token: 'byoa_original',
+      gatewayUrl: 'https://gateway.example',
+      onMessage: async () => null,
+      onTokenRotated: (t) => {
+        stored.push(t);
+      },
+    });
+
+    await expect(agent.rotateToken()).resolves.toBe('byoa_new');
+    expect(stored).toEqual(['byoa_new']);
+    const streamInit = fetchMock.mock.calls[1][1] as { headers: Record<string, string> };
+    expect(streamInit.headers.Authorization).toBe('Bearer byoa_new');
+  });
+
+  it('throws a plain Error on 403 stale_token and never calls onTokenRotated', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({ error: 'stale_token' }) } as unknown as Response)
+    );
+    const onTokenRotated = vi.fn();
+    const agent = new TriologueAgent({
+      token: 'byoa_old',
+      gatewayUrl: 'https://gateway.example',
+      onMessage: async () => null,
+      onTokenRotated,
+    });
+
+    const err = await agent.rotateToken().catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err).not.toBeInstanceOf(TokenRotationNotSupportedError);
+    expect((err as Error).message).toBe('Token rotation failed: 403');
+    expect(onTokenRotated).not.toHaveBeenCalled();
   });
 });

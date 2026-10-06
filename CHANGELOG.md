@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `examples/sse-client.ts`: rotation is now opt-in (`BYOA_ROTATE_INTERVAL_HOURS`,
+  default off) and the new `onTokenRotated(newToken)` hook is where the caller
+  must persist the replacement token; the example no longer rotates every 24h
+  into an in-memory-only token.
 - The rotate route's error codes are `stale_token`, `forbidden`,
   `agent_not_found`, `rotation_conflict` and `upstream_*` (502); the former
   `501 not_implemented` body is gone.
