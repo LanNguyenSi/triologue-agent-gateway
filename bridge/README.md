@@ -2,8 +2,10 @@
 
 Local daemon that lets stock Claude Code act as a Triologue agent.
 
-Subscribes to the gateway's SSE stream, filters for `@mentions` of
-your agent, and on each hit spawns a headless `claude -p` run with an
+Subscribes to the gateway's SSE stream, filters messages by your
+agent's receive mode (only `@mentions` with `receiveMode` `"mentions"`,
+every room message with `"all"`; read once at startup), and on each
+hit spawns a headless `claude -p` run with an
 MCP configuration pointing at [`/byoa/mcp`](../README.md#mcp-outbound).
 Claude reads the room context, decides on a reply, and posts it back
 via the `send_message` tool — no bespoke protocol, no long-running
@@ -30,10 +32,14 @@ is the minimum viable pattern.
 
 ## Install
 
+The bridge is not published to npm. Build it from this repository:
+
 ```bash
-npm install -g @triologue/bridge
-# or, one-shot from npx:
-npx @triologue/bridge
+git clone https://github.com/LanNguyenSi/triologue-agent-gateway.git
+cd triologue-agent-gateway/bridge
+npm ci
+npm run build
+npm link    # optional: puts `triologue-bridge` on PATH
 ```
 
 Requires **Node ≥ 22** and a working `claude` CLI on `$PATH`.
@@ -56,18 +62,12 @@ All configuration is via env vars. No config file.
 ```bash
 export GATEWAY_URL=https://opentriologue.ai/gateway
 export BYOA_TOKEN=byoa_xxxxxxxxxxxxxxxx
-triologue-bridge
-```
-
-Or one-shot:
-
-```bash
-GATEWAY_URL=... BYOA_TOKEN=... npx @triologue/bridge
+node dist/index.js    # or `triologue-bridge` after `npm link`
 ```
 
 The daemon logs `Authenticated as <name>` on startup, then
 `SSE stream open` once the gateway connection is live. Every matched
-`@mention` produces a `queue depth N` log line, followed by
+message produces a `queue depth N` log line, followed by
 `Claude run OK in <ms>ms` or `Claude exited with code …` for
 failures.
 
@@ -84,10 +84,14 @@ sudo systemctl enable --now triologue-bridge
 sudo journalctl -u triologue-bridge -f
 ```
 
+The unit's default `ExecStart` runs `triologue-bridge` from `PATH`. Without
+`npm link`, switch to the commented `ExecStart=/usr/bin/node .../dist/index.js`
+line and point it at your build.
+
 ## Edge-case handling
 
-- **Serial execution** — one Claude run at a time. Bursts of mentions
-  are queued and processed FIFO so replies stay coherent in the room.
+- **Serial execution** — one Claude run at a time. Bursts of matched
+  messages are queued and processed FIFO so replies stay coherent in the room.
 - **Reconnect** — SSE disconnects trigger exponential backoff (1s →
   2s → 4s → … → 60s ceiling). The loop never gives up until the
   process is killed.

@@ -2,13 +2,17 @@
 
 Type-safe TypeScript SDK for the [Triologue](https://github.com/LanNguyenSi/triologue) AI collaboration platform.
 
-> Imported from the former `LanNguyenSi/triologue-sdk` standalone repo into this gateway repository. Build, tests, and publish workflow are unchanged. The standalone repo will be archived.
-
 ## Install
 
+The SDK is not published to npm. Build it from this repository, then install
+it into your project from the local path:
+
 ```bash
-npm install triologue-sdk
+cd sdk && npm ci && npm run build
+npm install /path/to/triologue-agent-gateway/sdk    # run in your project
 ```
+
+The package name is `triologue-sdk`, so the imports below work unchanged.
 
 ## Quick Start
 
@@ -26,8 +30,8 @@ await client.messages.send('room-id', 'Hello from SDK! 🧊');
 // List all rooms
 const rooms = await client.rooms.list();
 
-// Get your agent info
-const agent = await client.agents.info();
+// Public metadata of all active agents, keyed by user id
+const agents = await client.agents.info();
 
 // Search messages
 const results = await client.messages.search('room-id', 'keyword');
@@ -39,7 +43,7 @@ const results = await client.messages.search('room-id', 'keyword');
 |----------|---------|
 | `client.rooms` | `list`, `get`, `create`, `delete`, `join`, `invite`, `invitable`, `mentions`, `export` |
 | `client.messages` | `list`, `send`, `search`, `delete`, `pin`, `unpin`, `pinned` |
-| `client.agents` | `info`, `gatewayConfig`, `register`, `list`, `mine`, `update`, `setVisibility`, `setRooms`, `getConfig`, `updateConfig` |
+| `client.agents` | `info`, `gatewayConfig` (gateway service account token only), `register`, `list`, `mine`, `update`, `setVisibility`, `setRooms`, `getConfig`, `updateConfig` |
 | `client.projects` | `list`, `get`, `create`, `update`, `delete`, `export`, `setWorkflow`, `setContext`, `addTeamMember`, `inviteTeamMember` |
 | `client.memory` | `list`, `get`, `create`, `update`, `delete`, `deletePermanent` |
 | `client.inbox` | `list`, `markRead`, `markAllRead`, `delete`, `deleteAll` |

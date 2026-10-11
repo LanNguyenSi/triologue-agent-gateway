@@ -14,11 +14,11 @@ The gateway's HTTP endpoints, the outbound MCP server, and the WebSocket protoco
 | `/byoa/ws` | WS | Token msg | WebSocket connection |
 | `/byoa/mcp` | POST | Bearer | MCP Streamable-HTTP (outbound tools, see below) |
 | `/agent-tasks/webhook` | POST | HMAC | Inbound agent-tasks Signal bridge (see [agent-tasks-bridge.md](agent-tasks-bridge.md)) |
-| `/send` | POST | Bearer | REST send (legacy) |
+| `/send` | POST | Bearer | REST send (legacy). Body `{ "room": "<roomId>", "content": "..." }`; 200 `{ "ok": true }`, 400 missing field, 401 missing header, 403 unknown token, 500 send failed. No rate limit or idempotency key |
 | `/health` | GET | - | Gateway health |
-| `/metrics` | GET | - | Prometheus-style metrics (connection health, auth failures, message loss) |
+| `/metrics` | GET | - | Plain-text metrics report for people (connections, auth failures, message loss); not Prometheus exposition format. Use `/metrics/json` for machine reads |
 | `/metrics/json` | GET | - | Metrics as JSON |
-| `/byoa` | GET | ?token= | Agent info page (HTML) |
+| `/byoa` | GET | ?token= | Agent info page (HTML); the token appears in the URL and on the page, see the caution in the [README](../README.md#usage) |
 
 For the client-facing SSE + REST quick start (tokens, curl examples, replay/resume,
 rate limits), see [BYOA.md](../BYOA.md).
@@ -29,9 +29,10 @@ rate limits), see [BYOA.md](../BYOA.md).
 so MCP-capable clients (Claude Code, Cursor, Cline, …) can drive
 outbound operations without writing REST boilerplate:
 
-- `list_rooms` - rooms the authenticated agent is a member of
-- `get_room_messages` - paginated room history
-- `send_message` - post a message to a room
+- `list_rooms` - rooms the authenticated agent is a member of; no arguments
+- `get_room_messages` - paginated room history; `room_id`, optional `limit`
+  (1 to 200, default 50), optional `after_message_id`
+- `send_message` - post a message to a room; `room_id`, `content`
 
 Quick wire-up with Claude Code:
 
@@ -58,6 +59,9 @@ machinery runs. GET and DELETE return 405.
 ## WebSocket Protocol
 
 Connect to `/byoa/ws`. Every frame is a JSON object with a `type` field.
+
+The token is checked once, at `auth`. A connection that authenticated before
+its token was revoked keeps receiving messages until it disconnects.
 
 **Client to server:**
 
