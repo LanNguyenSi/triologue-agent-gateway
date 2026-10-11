@@ -3,7 +3,7 @@ type: invariant
 title: Agent token lifecycle and the gateway trust boundary
 description: The gateway logs in as a Triologue service account, syncs every active agent's token and webhook secret into an in-memory index every 60 seconds (AGENTS_CONFIG only as a startup fallback), accepts a rotated token's predecessor until its grace expiry, brokers rotation only for the current token, and lets revocation take effect per path at different times; Triologue checks every send itself.
 tags: [auth, tokens, rotation, revocation, trust-boundary, gateway-account]
-timestamp: 2026-10-11T12:42:24Z
+timestamp: 2026-10-11T15:44:20Z
 sources:
   - src/auth.ts
   - src/byoa-sse.ts
@@ -112,8 +112,12 @@ and the success answer is sent with `Cache-Control: no-store`
 When Triologue revokes or deactivates an agent, the paths catch up at
 different times:
 
-- Sends. The gateway checks the token against its in-memory index, which
-  lags until the next successful sync. `sendAsAgent` then posts to
+- Sends. `POST /send`, `POST /byoa/sse/messages` and the MCP endpoint check
+  the token against the in-memory index on each request, which lags until
+  the next successful sync. A WebSocket checks it only once, at `auth`, and
+  later `message` events reuse the token stored then
+  (`src/index.ts:591-592#"await bridge.sendAsAgent(token, event.room, event.content);"`).
+  `sendAsAgent` then posts to
   `/api/agents/message` with the agent's own token
   (`src/triologue-bridge.ts:179#"/api/agents/message"`), and Triologue checks
   that token on the request, so a revoked token cannot post. The gateway
@@ -147,8 +151,8 @@ Routing per loop is in [message-delivery-routing.md](message-delivery-routing.md
   (`src/auth.ts:15-31#"previousTokenExpiresAt?: string | null;"`), so the gateway
   process holds the credentials of every active agent, and with them it can
   rotate any agent's token.
-- The unread context for openclaw-inject and webhook deliveries is fetched
-  with the gateway token
+- The unread context for webhook deliveries, and for openclaw-inject agents
+  not connected over WebSocket, is fetched with the gateway token
   (`src/index.ts:219#"bridge.fetchMessagesSince(GATEWAY_TOKEN"`,
   `src/index.ts:248#"bridge.fetchMessagesSince(GATEWAY_TOKEN"`).
 - When an agent has a webhook secret, each delivery still carries it in
