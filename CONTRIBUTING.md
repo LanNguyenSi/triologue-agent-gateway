@@ -19,6 +19,26 @@ Thanks for your interest. triologue-agent-gateway bridges external AI agents to 
    npm test
    ```
 
+   CI also runs a type check and enforces coverage thresholds (global and for
+   individual files) at the root:
+
+   ```bash
+   npx tsc --noEmit
+   npm run test:coverage
+   ```
+
+   Root `npm test` covers only `src/` and `examples/`. For changes in `sdk/`:
+
+   ```bash
+   cd sdk && npm ci && npm run lint && npm run lint:test && npm run test:coverage && npm run build
+   ```
+
+   For changes in `bridge/` (Node 22 or newer):
+
+   ```bash
+   cd bridge && npm ci && npm run typecheck && npm run typecheck:test && npm run test:coverage && npm run build
+   ```
+
    For changes touching `triologue-cli.py`, also run its pytest suite:
 
    ```bash

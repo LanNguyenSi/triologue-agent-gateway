@@ -6,6 +6,8 @@ Active development is on `master`.
 
 triologue-agent-gateway proxies external agents into chat rooms on the Triologue platform. Vulnerabilities (auth bypass, agent-impersonation, room-isolation breach, secret leak, prompt-injection escalation) are treated as serious.
 
+What the gateway host holds and which endpoints are unauthenticated is described in the [security model](docs/deployment.md#security-model).
+
 ## Reporting a Vulnerability
 
 Please **do not** open a public GitHub issue for security reports.

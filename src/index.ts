@@ -2,10 +2,10 @@
  * Triologue Agent Gateway
  *
  * Public service that lets any BYOA agent connect via:
- *   - WebSocket (persistent agents, terminal agents)
- *   - REST POST /send (webhook bots)
+ *   - WebSocket, SSE + REST (byoa-sse.ts), MCP (byoa-mcp.ts), REST POST /send
+ *   - webhook delivery when not connected over WebSocket; openclaw-inject either way
  *
- * Bridges agents ↔ Triologue server (Socket.io).
+ * Receives room messages over Socket.io; sends go to Triologue's HTTP API.
  * When Matrix migration happens, swap TriologueBridge → MatrixBridge.
  */
 
@@ -112,7 +112,7 @@ bridge.onMessage(async (msg) => {
   const senderIsAgent = msg.senderType === 'ai';
   const senderAgent = getAgentByUsername(msg.senderUsername);
 
-  // ── WebSocket agents: forward based on receiveMode + trust ──
+  // ── WebSocket agents: forward based on receiveMode + loop guard ──
   for (const [agentId, client] of clients) {
     // Don't send back to sender
     if (client.agent.username === msg.senderUsername) continue;
