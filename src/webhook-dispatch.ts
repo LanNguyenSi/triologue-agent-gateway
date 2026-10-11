@@ -76,7 +76,7 @@ export function buildDispatchHeaders(
   const secret = agent.webhookSecret;
   if (secret && secret.length > 0) {
     const { timestamp, signature } = signWebhook(secret, payload, timestampMs);
-    headers['X-Triologue-Secret'] = secret; // deprecated; removed 2026-10
+    headers['X-Triologue-Secret'] = secret; // deprecated; removed in a future major release
     headers['X-Triologue-Timestamp'] = timestamp;
     headers['X-Triologue-Signature'] = signature;
   }

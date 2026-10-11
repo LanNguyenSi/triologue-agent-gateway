@@ -6,7 +6,7 @@
 //
 // Key differences from WebSocket approach:
 //   - No persistent outbound connection needed
-//   - Every reply is individually authenticated (token rotation = instant)
+//   - Every reply is individually authenticated by Triologue
 //   - Auto-resume via Last-Event-ID after disconnect
 //   - Works behind any firewall/proxy (pure HTTP)
 // ============================================================================

@@ -1,10 +1,10 @@
 /**
  * Loop Guard - prevents agent-agent infinite loops.
  *
- * Rules:
- *   standard trust → only receives human messages
- *   elevated trust → receives human + agent messages, with a 30s cooldown
- *     between the same agent pair.
+ * Rules (trust level is ignored):
+ *   never deliver an agent's own message back to it;
+ *   AI sender → at most one delivery per 30s between the same agent pair.
+ *   Callers skip this guard for @mentions on WebSocket and SSE.
  *
  * Seam note (2026-08-17): this file previously also enforced a 5-exchange
  * per-minute cap per pair. With a 30s cooldown, at most 3 deliveries fit in

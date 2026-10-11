@@ -1,11 +1,11 @@
 /**
  * Triologue Bridge — connects to Triologue server via Socket.io.
  * 
- * Receives all room messages and dispatches them to:
- *   1. Connected WebSocket agents
- *   2. Webhook agents (on @mention)
+ * Receives room messages (message:new) and task:assigned events and hands
+ *   them to the routing callbacks in index.ts (WebSocket, SSE, webhook and
+ *   openclaw-inject delivery).
  * 
- * Sends agent messages back to Triologue rooms.
+ * Sends agent messages to Triologue over HTTP (POST /api/agents/message).
  * 
  * This is the "backend adapter". When we migrate to Matrix,
  * this file gets replaced with matrix-bridge.ts — nothing else changes.
