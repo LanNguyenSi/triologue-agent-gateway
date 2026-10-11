@@ -39,7 +39,9 @@ exits if its first connection to Triologue fails.
 - The account must be a participant of every room the gateway should relay.
   Rooms created through Triologue's room or project creation get the user
   with id `gateway-system` as a participant, and Triologue joins that user's
-  live connection to the new room immediately. A room the gateway account is
+  live connection to the new room immediately. This covers the gateway only
+  when its account's user id is `gateway-system`; with any other id, add the
+  account to each new room yourself. A room the gateway account is
   added to in any other way takes effect after a reconnect or restart, because
   the gateway joins its rooms only when it connects to Triologue.
 
@@ -60,6 +62,9 @@ Each agent synced from Triologue carries a `delivery` field:
   `openclaw-inject` agent, but Triologue sends that event only to the
   assignee's own connection, so the gateway receives it only for tasks
   assigned to the account it logs in as.
+
+Any other value, such as `sse` (Triologue's default for new agents), is
+handled like `webhook`.
 
 ## Agent registration
 

@@ -1,10 +1,10 @@
 # Architecture
 
-Agents reach the gateway over SSE + REST, WebSocket, legacy REST `/send` and MCP; agent-tasks posts signals to its own route. Room messages arrive over one Socket.io connection; sends, the agent sync, token rotation and history reads use Triologue's HTTP API.
+Agents reach the gateway over SSE + REST, WebSocket, legacy REST `/send` and MCP; agent-tasks posts signals to its own route. Room messages arrive over one Socket.io connection; sends, logins and room lists, the agent sync, token rotation and history reads use Triologue's HTTP API.
 
 ## Sending and the Triologue HTTP API
 
-Every send path ends in `sendAsAgent` in `triologue-bridge.ts`, which posts the message to Triologue's `POST /api/agents/message` with the sending agent's own token. The agent sync and token rotation in `auth.ts`, and the room history reads, are HTTP calls as well. The diagram shows these outbound paths.
+Every send path ends in `sendAsAgent` in `triologue-bridge.ts`, which posts the message to Triologue's `POST /api/agents/message` with the sending agent's own token. The agent sync and token rotation in `auth.ts`, and the room history reads, are HTTP calls as well. So are the gateway's own login (`POST /api/auth/login`) and the room list that `list_rooms` and WebSocket authentication fetch with the agent's token (`POST /api/auth/login`, then `GET /api/rooms`). The diagram shows these outbound paths.
 
 ```mermaid
 flowchart TD
@@ -28,8 +28,9 @@ flowchart TD
   end
 
   TRIO["Triologue server"]
+  REDIS[("Redis")]
 
-  A1 -->|"POST /byoa/sse/messages"| SSE
+  A1 -->|"POST /byoa/sse/messages,<br/>/byoa/sse/tokens/rotate"| SSE
   A2 -->|"message frame"| WS
   A6 -->|"POST /send"| SEND
   A4 -->|"Streamable HTTP"| MCP
@@ -41,12 +42,12 @@ flowchart TD
   SEND --> BRIDGE
   MCP --> BRIDGE
   ATB --> BRIDGE
-  SSE -->|"POST /byoa/sse/tokens/rotate"| AUTH
+  SSE -->|"rotateTokenUpstream"| AUTH
+  SSE <-->|"idempotency keys"| REDIS
 
+  AUTH -->|"HTTP GET /api/agents/<br/>gateway-config every 60 s,<br/>token rotation"| TRIO
   BRIDGE -->|"HTTP POST /api/agents/message<br/>with the agent's token"| TRIO
-  BRIDGE -->|"HTTP GET /api/messages/:roomId"| TRIO
-  AUTH -->|"HTTP GET /api/agents/gateway-config<br/>every 60 s"| TRIO
-  AUTH -->|"HTTP token rotate"| TRIO
+  BRIDGE -->|"HTTP GET /api/messages/:roomId,<br/>POST /api/auth/login,<br/>GET /api/rooms"| TRIO
 ```
 
 ## Receiving and delivery
@@ -78,7 +79,7 @@ flowchart TD
   BRIDGE --> ROUTE
   ROUTE --> SSE
   ROUTE --> WS
-  SSE <-->|"replay buffer, idempotency keys"| REDIS
+  SSE <-->|"replay buffer<br/>(Last-Event-ID)"| REDIS
   SSE -->|"SSE stream"| A1
   SSE -->|"SSE stream"| BD
   WS -->|"WebSocket frame"| A2
@@ -88,7 +89,7 @@ flowchart TD
 
 ## Inbound message routing
 
-`index.ts` runs three loops for every incoming message: one over connected WebSocket agents, one over agents with an open SSE stream, and one over webhook and `openclaw-inject` agents that are not connected over WebSocket. An @mention bypasses the loop guard on WebSocket and SSE. In the webhook loop, agents are called only on an @mention, and the loop guard applies even then, so another AI agent reaches each of them at most once every 30 seconds. An `openclaw-inject` agent connected over WebSocket is handled by the WebSocket loop instead, under the same `receiveMode` and loop guard rules as other WebSocket agents. An agent with an SSE stream and a `webhookUrl` receives an @mention on both. The loop guard never delivers an agent's own message back to it, limits deliveries between two agents to one every 30 seconds when the sender is an AI agent, and ignores the trust level.
+`index.ts` runs three loops for every incoming message: one over connected WebSocket agents, one over agents with an open SSE stream, and one over webhook and `openclaw-inject` agents that are not connected over WebSocket. An @mention bypasses the loop guard on WebSocket and SSE. In the webhook loop, agents are called only on an @mention, and the loop guard applies even then, so another AI agent reaches each of them at most once every 30 seconds. This loop checks the loop guard before the @mention, so any message from that AI agent, even one without a mention, starts the 30-second window, and the window is shared by both directions between the two agents: an @mention that follows within 30 seconds is not delivered. An `openclaw-inject` agent connected over WebSocket is handled by the WebSocket loop instead, under the same `receiveMode` and loop guard rules as other WebSocket agents. An agent with an SSE stream and a `webhookUrl` receives an @mention on both. The loop guard never delivers an agent's own message back to it, limits deliveries between two agents to one every 30 seconds when the sender is an AI agent, and ignores the trust level.
 
 The diagram shows which filters apply in each loop.
 

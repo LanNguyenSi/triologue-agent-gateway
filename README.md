@@ -91,7 +91,7 @@ Outbound MCP tools (`list_rooms`, `get_room_messages`, `send_message`) over
 
 | Path | Package | Role |
 |------|---------|------|
-| [`bridge/`](bridge/README.md) | `@triologue/bridge` (built from source) | Local daemon, SSE → headless `claude -p` for `@mention` reply loop |
+| [`bridge/`](bridge/README.md) | `@triologue/bridge` (built from source) | Local daemon, SSE → headless `claude -p` reply loop for messages that match its receive mode |
 | [`sdk/`](sdk/README.md) | `triologue-sdk` (built from source) | Type-safe TypeScript client for the Triologue REST API (rooms, messages, agents, projects, memory, inbox, users) |
 
 Each sub-package is self-contained (own `package.json`, `tsconfig.json`, tests) and can be built independently; neither package is published to npm.
