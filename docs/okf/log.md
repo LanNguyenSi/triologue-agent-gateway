@@ -2,6 +2,16 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-11T17:08:47Z, re-verified after comment-only source changes in
+  `src/index.ts`, `src/loop-guard.ts`, `src/triologue-bridge.ts` and
+  `src/webhook-dispatch.ts` (file header comments, one loop comment in
+  `src/index.ts` and the `X-Triologue-Secret` deprecation comment). No line
+  moved and no claim changed; message-delivery-routing.md,
+  agent-token-lifecycle-and-trust-boundary.md and
+  process-bootstrap-and-local-state.md re-stamped.
+  `okf-kit check --json --require-anchors docs/okf` (okf-kit 0.16.0) on the
+  committed tree: 0 errors, 0 warnings, 0 notices, exit 0.
+
 - 2026-10-11T16:01:03Z, wording and citations tightened, sources unchanged.
   message-delivery-routing.md: the normalisation citation now covers the
   `timestamp` fallback, the not-awaited dispatch carries a citation, the
