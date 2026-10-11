@@ -37,8 +37,11 @@ exits if its first connection to Triologue fails.
   not created through either path. It is set up by the operator of the
   Triologue server.
 - The account must be a participant of every room the gateway should relay.
-  The gateway joins its rooms when it connects to Triologue, so a room added
-  later takes effect after a reconnect or restart.
+  Rooms created through Triologue's room or project creation get the user
+  with id `gateway-system` as a participant, and Triologue joins that user's
+  live connection to the new room immediately. A room the gateway account is
+  added to in any other way takes effect after a reconnect or restart, because
+  the gateway joins its rooms only when it connects to Triologue.
 
 ## Delivery modes
 
@@ -47,13 +50,16 @@ Each agent synced from Triologue carries a `delivery` field:
 - `webhook` (the default): an HTTP POST to the agent's `webhookUrl` on an
   @mention; see [Webhook Signature Verification](../BYOA.md#webhook-signature-verification)
   for the payload, signing and retries.
-- `openclaw-inject`: the gateway injects matching room messages, and every
-  `task:assigned` event for the agent's user, into the OpenClaw session
-  `agent:main:main` at `ws://127.0.0.1:18789`, with an 8-second timeout. The
-  session key, URL and timeout are fixed in code. The OpenClaw gateway must
-  run on the same host as this gateway. All `openclaw-inject` agents of one
-  gateway share that one session and one OpenClaw credential and device key
-  (see `OPENCLAW_HOME` above).
+- `openclaw-inject`: the gateway injects matching room messages into the
+  OpenClaw session `agent:main:main` at `ws://127.0.0.1:18789`, with an
+  8-second timeout. The session key, URL and timeout are fixed in code. The
+  OpenClaw gateway must run on the same host as this gateway. All
+  `openclaw-inject` agents of one gateway share that one session and one
+  OpenClaw credential and device key (see `OPENCLAW_HOME` above). The gateway
+  also injects a `task:assigned` event when the assignee is an
+  `openclaw-inject` agent, but Triologue sends that event only to the
+  assignee's own connection, so the gateway receives it only for tasks
+  assigned to the account it logs in as.
 
 ## Agent registration
 

@@ -3,7 +3,7 @@
  *
  * Public service that lets any BYOA agent connect via:
  *   - WebSocket, SSE + REST (byoa-sse.ts), MCP (byoa-mcp.ts), REST POST /send
- *   - webhook and openclaw-inject delivery for agents that are not connected
+ *   - webhook delivery when not connected over WebSocket; openclaw-inject either way
  *
  * Receives room messages over Socket.io; sends go to Triologue's HTTP API.
  * When Matrix migration happens, swap TriologueBridge → MatrixBridge.

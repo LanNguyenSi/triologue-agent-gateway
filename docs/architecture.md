@@ -74,7 +74,7 @@ flowchart TD
     OC["Local OpenClaw gateway<br/>ws://127.0.0.1:18789"]
   end
 
-  TRIO -->|"socket.io message:new, task:assigned"| BRIDGE
+  TRIO -->|"socket.io message:new;<br/>task:assigned only for the<br/>gateway account's own tasks"| BRIDGE
   BRIDGE --> ROUTE
   ROUTE --> SSE
   ROUTE --> WS
@@ -88,7 +88,7 @@ flowchart TD
 
 ## Inbound message routing
 
-`index.ts` runs three loops for every incoming message: one over connected WebSocket agents, one over agents with an open SSE stream, and one over webhook and `openclaw-inject` agents. An @mention bypasses the loop guard on WebSocket and SSE. Webhook and `openclaw-inject` agents are called only on an @mention and always pass the loop guard. An agent with an SSE stream and a `webhookUrl` receives an @mention on both. The loop guard never delivers an agent's own message back to it, limits deliveries between two agents to one every 30 seconds when the sender is an AI agent, and ignores the trust level.
+`index.ts` runs three loops for every incoming message: one over connected WebSocket agents, one over agents with an open SSE stream, and one over webhook and `openclaw-inject` agents that are not connected over WebSocket. An @mention bypasses the loop guard on WebSocket and SSE. In the webhook loop, agents are called only on an @mention, and the loop guard applies even then, so another AI agent reaches each of them at most once every 30 seconds. An `openclaw-inject` agent connected over WebSocket is handled by the WebSocket loop instead, under the same `receiveMode` and loop guard rules as other WebSocket agents. An agent with an SSE stream and a `webhookUrl` receives an @mention on both. The loop guard never delivers an agent's own message back to it, limits deliveries between two agents to one every 30 seconds when the sender is an AI agent, and ignores the trust level.
 
 The diagram shows which filters apply in each loop.
 
