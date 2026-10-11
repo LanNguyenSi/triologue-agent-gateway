@@ -3,7 +3,7 @@ type: invariant
 title: Agent token lifecycle and the gateway trust boundary
 description: The gateway logs in as a Triologue service account, syncs every active agent's token and webhook secret into an in-memory index every 60 seconds (AGENTS_CONFIG only as a startup fallback), accepts a rotated token's predecessor until its grace expiry, brokers rotation only for the current token, and lets revocation take effect per path at different times; Triologue checks every send itself.
 tags: [auth, tokens, rotation, revocation, trust-boundary, gateway-account]
-timestamp: 2026-10-11T15:44:20Z
+timestamp: 2026-10-11T16:01:03Z
 sources:
   - src/auth.ts
   - src/byoa-sse.ts
@@ -141,7 +141,13 @@ different times:
   without checking the token again, so a connection that authenticated
   before the revocation keeps receiving until it disconnects.
 - Rotation. The previous token keeps authenticating at the gateway until its
-  grace expiry, as above.
+  grace expiry, as above. An SSE stream or WebSocket connection opened with
+  the previous token is not closed at grace expiry: delivery is keyed by the
+  agent's user id, not the token
+  (`src/index.ts:178-179#"if (!hasSSEClient(agent.userId)) continue;"`,
+  `src/index.ts:549-550#"clients.set(agent.userId, client);"`), and the
+  rotated agent stays in the synced list, so the connection keeps receiving
+  until it disconnects.
 
 Routing per loop is in [message-delivery-routing.md](message-delivery-routing.md).
 

@@ -3,7 +3,7 @@ type: invariant
 title: Message delivery routing across WebSocket, SSE, webhook and openclaw-inject
 description: One inbound Triologue message runs through three loops in src/index.ts (WebSocket clients, SSE agents, webhook and openclaw-inject agents) with different filters; the loop guard ignores trust level, an @mention bypasses it on WebSocket and SSE only, WebSocket wins over SSE and webhook, SSE and webhook can both fire, and the SSE replay buffer only holds messages fanned out while a stream was open.
 tags: [routing, delivery, loop-guard, sse, websocket, webhook, replay]
-timestamp: 2026-10-11T12:42:24Z
+timestamp: 2026-10-11T16:01:03Z
 sources:
   - src/index.ts
   - src/loop-guard.ts
@@ -36,7 +36,7 @@ mode, @mentions and the loop guard, as described below.
 loops read. `senderType` is `'ai'` when the sender's user type starts with
 `AI`, otherwise `'human'`; `senderId` and `timestamp` fall back to the
 sender object and to the receive time
-(`src/triologue-bridge.ts:127-139#"senderType: isAgent ? 'ai' : 'human',"`).
+(`src/triologue-bridge.ts:127-143#"timestamp: raw.createdAt ?? new Date().toISOString(),"`).
 
 ## The three loops
 
@@ -60,7 +60,7 @@ flowchart TD
   L3 --> F3{"not the sender;<br/>shouldDeliver;<br/>@mention;<br/>not in clients map"}
   F3 --> D3{"delivery<br/>openclaw-inject?"}
   D3 -->|yes| INJ3["injectToSession"]
-  D3 -->|no| WH["dispatchWebhook"]
+  D3 -->|no, has webhookUrl| WH["dispatchWebhook"]
 ```
 
 ### Loop 1: WebSocket clients
@@ -135,7 +135,11 @@ Iterates agents whose `connectionType` is `webhook` or `both` and that have a
 (`src/index.ts:122#"const mentioned = msg.content.toLowerCase()"`,
 `src/index.ts:206#"const lc = msg.content.toLowerCase();"`). Only the message
 text is lower-cased; the key and the username are compared as stored, so the
-match is case-insensitive only for keys stored in lower case.
+match is case-insensitive only for keys stored in lower case. A `mentionKey`
+or username that contains an upper-case letter never matches, so an agent
+whose `mentionKey` and username both contain one is never reached by an
+@mention: it gets nothing on loop 3, and on loops 1 and 2 only what
+`receiveMode: 'all'` and the loop guard let through.
 
 ## Loop-guard semantics
 
@@ -168,7 +172,8 @@ other non-2xx answer or a network error is retried up to three times after 1, 2 
 (`src/webhook-dispatch.ts:11-12#"const BASE_DELAY_MS = 1000;"`), after which the
 message is dropped and counted as lost
 (`src/webhook-dispatch.ts:136-140#"metrics.recordMessageLost(payload.agentId, payload.roomId, 'max retries exceeded');"`).
-The dispatch is not awaited by the routing loop.
+The dispatch is not awaited by the routing loop
+(`src/index.ts:280#"dispatchWebhook({"`).
 
 ## Unread context and the read tracker
 

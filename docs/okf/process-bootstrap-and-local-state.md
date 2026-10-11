@@ -3,7 +3,7 @@ type: module
 title: Process bootstrap and local state
 description: What importing src/index.ts already does (router mount order for the raw-body HMAC route, Redis clients, metrics timer), the module-is-main guard and its extensionless-invocation trap, the startup order from the GATEWAY_TOKEN check to listen, and where the gateway keeps local state, including under the Docker runtime user.
 tags: [bootstrap, startup, entrypoint, local-state, redis, docker]
-timestamp: 2026-10-11T12:42:24Z
+timestamp: 2026-10-11T16:01:03Z
 sources:
   - src/index.ts
   - src/agent-tasks-bridge.ts
@@ -64,9 +64,10 @@ steps without the guard:
 
 `isMainModule` compares `process.argv[1]` with the module's own file path
 (`src/index.ts:719-722#"main();"`). That path always carries its extension,
-while `argv[1]` is whatever was typed, so `node dist/index` (without `.js`)
-never matches: `main()` does not run, and the Redis clients opened at import
-keep the event loop alive, so the process stays up without listening
+while `argv[1]` is the absolute path of what was typed, without extension
+resolution, so `node dist/index` (without `.js`) never matches: `main()`
+does not run, and the Redis clients opened at import keep the event loop
+alive, so the process stays up without listening
 (`src/index.ts:707-716#"Always invoke with the explicit"`). The Docker `CMD`
 uses the explicit extension (`Dockerfile:19#"dist/index.js"`).
 
@@ -79,7 +80,10 @@ uses the explicit extension (`Dockerfile:19#"dist/index.js"`).
 2. Loads `AGENTS_CONFIG`, builds the token index and loads the read tracker
    (`src/index.ts:691-693#"loadReadTracker();"`), then calls `start()`
    (`src/index.ts:695#"await start();"`).
-3. `start()` connects the bridge: a login, then the Socket.io connection
+3. `start()` connects the bridge: it authenticates, with a fresh login
+   unless the cached session token is still valid
+   (`src/triologue-bridge.ts:315-336#"// Fresh login"`), then
+   opens the Socket.io connection
    (`src/triologue-bridge.ts:73-75#"await this.createSocket();"`), which
    rejects after 10 seconds without a connection
    (`src/triologue-bridge.ts:155-158#"reject(new Error('Connection timeout (10s)'));"`).
@@ -140,9 +144,9 @@ the error: the read tracker and the metrics flush log it on every write
 `src/metrics.ts:128-132#"Failed to flush metrics"`), and the session-token
 cache write is dropped silently
 (`src/triologue-bridge.ts:346-352#"} catch {}"`). The state then lives in
-memory only and is gone after a restart. The image contains only `dist/` and
-the production dependencies (`Dockerfile:12-14#"COPY --from=builder /app/dist dist/"`),
-so an `AGENTS_CONFIG` file has to be mounted to be read.
+memory only and is gone after a restart. The image contains only
+`package.json`, the lockfile, `dist/` and the production dependencies
+(`Dockerfile:12-14#"COPY --from=builder /app/dist dist/"`), so an `AGENTS_CONFIG` file has to be mounted to be read.
 
 ## Invariants enforced here
 
