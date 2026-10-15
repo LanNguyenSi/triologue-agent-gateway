@@ -2,6 +2,22 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-10-15T11:28:46Z, re-verified against the changed sources. Message order: the context
+  of `fetchMessagesSince` is passed through oldest first. Loop 3 now calls the
+  loop guard after the mention and WebSocket checks, and mention matching
+  lower-cases the key and the username too (`isMentioned` in
+  `src/loop-guard.ts`). The read tracker, metrics log and JWT cache resolve
+  through `STATE_DIR` (`src/state-dir.ts`), which the image sets to
+  `/app/state`. The task-assignment section states that Triologue sends
+  `task:assigned` only to the assignee. All line citations in the three docs
+  were re-pointed; message-delivery-routing.md,
+  agent-token-lifecycle-and-trust-boundary.md and
+  process-bootstrap-and-local-state.md re-stamped.
+  `okf-kit check --json --require-anchors docs/okf` (okf-kit 0.19.0) on the
+  committed tree: 0 errors, 3 warnings (the same three reserved-files-structure
+  findings on `index.md` and `log.md` as before this change), no sources-fresh
+  or citation findings, exit 0.
+
 - 2026-10-11T17:08:47Z, re-verified after comment-only source changes in
   `src/index.ts`, `src/loop-guard.ts`, `src/triologue-bridge.ts` and
   `src/webhook-dispatch.ts` (file header comments, one loop comment in

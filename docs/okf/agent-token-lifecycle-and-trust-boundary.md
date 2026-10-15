@@ -3,7 +3,7 @@ type: invariant
 title: Agent token lifecycle and the gateway trust boundary
 description: The gateway logs in as a Triologue service account, syncs every active agent's token and webhook secret into an in-memory index every 60 seconds (AGENTS_CONFIG only as a startup fallback), accepts a rotated token's predecessor until its grace expiry, brokers rotation only for the current token, and lets revocation take effect per path at different times; Triologue checks every send itself.
 tags: [auth, tokens, rotation, revocation, trust-boundary, gateway-account]
-timestamp: 2026-10-11T17:08:47Z
+timestamp: 2026-10-15T11:28:46Z
 sources:
   - src/auth.ts
   - src/byoa-sse.ts
