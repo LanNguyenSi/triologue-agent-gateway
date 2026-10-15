@@ -26,7 +26,7 @@ sources:
 The gateway holds one Socket.io connection to Triologue under its own
 account. Which rooms' messages arrive on it is decided on the Triologue side
 (the server-side view is in the triologue repository's knowledge bundle,
-[agent-integration-surfaces.md](https://github.com/LanNguyenSi/triologue/blob/master/docs/okf/agent-integration-surfaces.md)).
+[agent-integration-surfaces.md](https://github.com/LanNguyenSi/triologue/blob/91e0de030e957e5dc70d89d79c36316e64c86e7d/docs/okf/agent-integration-surfaces.md)).
 The gateway forwards each message based on the sender, the agent's receive
 mode, @mentions and the loop guard, as described below.
 
@@ -189,7 +189,7 @@ order Triologue returns them, which is oldest first
 (`src/triologue-bridge.ts:302#"return data.messages || [];"`, which passes
 the page through unchanged;
 the messages route in the Triologue repository
-([`server/src/routes/messages.ts`](https://github.com/LanNguyenSi/triologue/blob/master/server/src/routes/messages.ts),
+([`server/src/routes/messages.ts`](https://github.com/LanNguyenSi/triologue/blob/91e0de030e957e5dc70d89d79c36316e64c86e7d/server/src/routes/messages.ts#L89-L97),
 lines 89 to 97) fetches newest first, takes `limit`, and reverses
 it to chronological order), without the current message, and empty on the
 first delivery in a room or when the history fetch fails
@@ -222,7 +222,7 @@ A `task:assigned` event is injected only into an agent with
 `delivery: 'openclaw-inject'` whose user id matches the assignee
 (`src/index.ts:295-303#"if (!agent) return;"`); no other channel receives it.
 Triologue emits `task:assigned` only to the assignee's own user room
-([`server/src/services/taskPushService.ts`](https://github.com/LanNguyenSi/triologue/blob/master/server/src/services/taskPushService.ts),
+([`server/src/services/taskPushService.ts`](https://github.com/LanNguyenSi/triologue/blob/91e0de030e957e5dc70d89d79c36316e64c86e7d/server/src/services/taskPushService.ts#L153-L155),
 lines 153 to 155, in the Triologue repository), so the gateway's connection receives the event
 only for tasks assigned to the account the gateway logs in as. For an agent
 the gateway merely relays, the handler never fires.

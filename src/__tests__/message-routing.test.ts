@@ -11,6 +11,8 @@
  *     mixed-case tests fail
  *   - moving shouldDeliver back before the mention check makes the
  *     "unmentioned AI message does not start the window" test fail
+ *   - moving shouldDeliver before the clients.has check in the webhook loop
+ *     makes the "connected over WebSocket" test fail
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,7 +27,21 @@ const mocks = vi.hoisted(() => ({
   allAgents: [] as unknown[],
   fanout: vi.fn().mockResolvedValue(undefined),
   hasSSE: vi.fn().mockReturnValue(false),
+  authenticate: vi.fn(),
+  wsConnection: null as ((ws: unknown) => void) | null,
 }));
+
+// Capture the /byoa/ws connection handler so a WS client can be registered
+// through the real auth path without binding a port.
+vi.mock('ws', () => {
+  class WebSocketServer {
+    on(event: string, cb: (ws: unknown) => void) {
+      if (event === 'connection') mocks.wsConnection = cb;
+    }
+    close = vi.fn();
+  }
+  return { WebSocketServer, WebSocket: { OPEN: 1 } };
+});
 
 vi.mock('../triologue-bridge', () => {
   class MockBridge {
@@ -43,7 +59,7 @@ vi.mock('../triologue-bridge', () => {
 vi.mock('../auth', () => ({
   loadAgents: vi.fn(),
   buildTokenIndex: vi.fn(),
-  authenticateToken: vi.fn(),
+  authenticateToken: (t: string) => mocks.authenticate(t),
   getWebhookAgents: () => mocks.webhookAgents,
   getAgentByUsername: vi.fn().mockReturnValue(null),
   getAllAgents: () => mocks.allAgents,
@@ -199,6 +215,38 @@ describe('webhook loop-guard window starts only on a delivery', () => {
     await handler(message({ content: '@repkey one' }));
     await handler(message({ content: '@repkey two' }));
 
+    expect(mocks.dispatchWebhook).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('webhook window is not started for an agent already served over WebSocket', () => {
+  /** Register a WS client through the real auth handler; returns a closer. */
+  async function connectWs(agent: AgentInfo): Promise<() => void> {
+    mocks.authenticate.mockReturnValue(agent);
+    const handlers: Record<string, (...a: unknown[]) => unknown> = {};
+    const ws = {
+      readyState: 1,
+      send: vi.fn(),
+      close: vi.fn(),
+      on: (ev: string, cb: (...a: unknown[]) => unknown) => { handlers[ev] = cb; },
+    };
+    mocks.wsConnection!(ws);
+    await handlers.message(Buffer.from(JSON.stringify({ type: 'auth', token: 'tok' })));
+    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('auth_ok'));
+    return () => { handlers.close(1000, 'test'); };
+  }
+
+  it('an AI @mention while connected is not dispatched by the webhook loop and does not start the window', async () => {
+    const agent = webhookAgent({ mentionKey: 'wskey', username: 'wsuser' });
+    mocks.webhookAgents = [agent];
+    const disconnect = await connectWs(agent);
+
+    await handler(message({ content: '@wskey while connected' }));
+    expect(mocks.dispatchWebhook).not.toHaveBeenCalled();
+
+    disconnect();
+
+    await handler(message({ content: '@wskey after disconnect' }));
     expect(mocks.dispatchWebhook).toHaveBeenCalledTimes(1);
   });
 });

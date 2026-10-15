@@ -2,8 +2,8 @@
  * Tests for src/read-tracker.ts - persisted last-seen-message state.
  *
  * `fs` is mocked so no real file at .read-tracker.json is read or
- * written - TRACKER_FILE is computed from `__dirname` at module load
- * with no injectable seam (out of scope for this task).
+ * written - TRACKER_FILE resolves through STATE_DIR (via src/state-dir.ts)
+ * at module load, so the fs mock is what keeps the tests off the real disk.
  *
  * Mutation guards (marked inline):
  *   M1: loadReadTracker stops guarding with existsSync (would throw on

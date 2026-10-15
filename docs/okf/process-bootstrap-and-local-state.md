@@ -11,6 +11,7 @@ sources:
   - src/metrics.ts
   - src/openclaw-inject.ts
   - src/read-tracker.ts
+  - src/state-dir.ts
   - src/triologue-bridge.ts
   - src/auth.ts
   - Dockerfile
