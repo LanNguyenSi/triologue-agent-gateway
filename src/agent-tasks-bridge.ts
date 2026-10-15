@@ -161,16 +161,16 @@ export function formatSignalMessage(payload: AgentTasksSignalPayload, agentTasks
     if (ft.forceReason) lines.push(`Reason: ${ft.forceReason}`);
   }
 
-  const link = buildTaskLink(agentTasksBaseUrl, payload.projectId, payload.taskId);
+  const link = buildTaskLink(agentTasksBaseUrl, payload.taskId);
   if (link) lines.push(`agent-tasks: ${link}`);
 
   return lines.join('\n');
 }
 
-function buildTaskLink(baseUrl: string, projectId: string, taskId: string): string | null {
+function buildTaskLink(baseUrl: string, taskId: string): string | null {
   if (!baseUrl) return null;
   const trimmed = baseUrl.replace(/\/+$/, '');
-  return `${trimmed}/projects/${projectId}/tasks/${taskId}`;
+  return `${trimmed}/tasks/${taskId}`;
 }
 
 /**

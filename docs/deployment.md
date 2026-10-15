@@ -28,18 +28,27 @@ it.
 
 ## Local state
 
-The gateway keeps three files one directory above its code directory:
+The gateway keeps three files in its state directory, `STATE_DIR`. Unset, that
+is the directory above its code directory (the project root, next to `dist/`):
 
 - `.read-tracker.json`: the last message delivered per agent and room, used
   for the webhook and `openclaw-inject` context.
 - `metrics.jsonl`: a metrics snapshot appended every 60 seconds.
 - `.jwt-cache-gateway.json`: the cached Triologue session token.
 
-In the image that directory is `/app`, which belongs to `root` while the
-process runs as the `app` user, so these files cannot be created there. The
-read tracker and the metrics log an error on each failed write, the session
-token cache fails silently, and the state is kept in memory only and lost on
-restart.
+The image sets `STATE_DIR=/app/state`, a directory owned by the `app` user
+that the process runs as, so the three files can be written. The directory
+must exist and be writable by the gateway process; the gateway does not create
+it. To keep the state across container replacements, mount a volume at
+`/app/state` that is writable by the `app` user (for example
+`docker run -v gateway-state:/app/state ...`). Without a volume the state
+lives in the container and is lost when it is removed. If a write fails, the
+read tracker and the metrics log an error, the session token cache fails
+silently, and the state is kept in memory only and lost on restart.
+
+To move existing state files (for example from an older image or a source
+checkout) into the state directory, copy them there before the first start
+with the new setting.
 
 ## Security model
 

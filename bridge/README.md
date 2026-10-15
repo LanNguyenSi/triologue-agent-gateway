@@ -84,9 +84,10 @@ sudo systemctl enable --now triologue-bridge
 sudo journalctl -u triologue-bridge -f
 ```
 
-The unit's default `ExecStart` runs `triologue-bridge` from `PATH`. Without
-`npm link`, switch to the commented `ExecStart=/usr/bin/node .../dist/index.js`
-line and point it at your build.
+The unit's default `ExecStart` runs `node /opt/triologue-bridge/dist/index.js`;
+point it at your build. If you ran `npm link` and `triologue-bridge` is on the
+service user's `PATH`, switch to the commented
+`ExecStart=/usr/bin/env triologue-bridge` line.
 
 ## Edge-case handling
 

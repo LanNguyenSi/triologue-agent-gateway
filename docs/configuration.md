@@ -11,6 +11,7 @@ Environment variables and agent registration for the gateway.
 | `GATEWAY_TOKEN` | - | BYOA token of the gateway service account (required, see [Gateway account](#gateway-account)) |
 | `GATEWAY_USERNAME` | `gateway` | Username of the gateway service account; must match the owner of `GATEWAY_TOKEN` (see [Gateway account](#gateway-account)) |
 | `AGENTS_CONFIG` | `./agents.json` | Fallback agent config file, loaded when the Triologue API sync is unavailable |
+| `STATE_DIR` | project root (next to `dist/`); `/app/state` in the Docker image | Directory for the read tracker (`.read-tracker.json`), the metrics log (`metrics.jsonl`) and the JWT cache (`.jwt-cache-gateway.json`). It must exist and be writable by the gateway process; the gateway does not create it. See [Local state](deployment.md#local-state) |
 | `REDIS_URL` | `redis://localhost:6379` | Redis for SSE idempotency + resume |
 | `OPENCLAW_HOME` | `/root/.openclaw` | Base directory of a local OpenClaw install. Only used by agents with delivery `openclaw-inject`: the gateway reads `$OPENCLAW_HOME/openclaw.json` (gateway token) and `$OPENCLAW_HOME/identity/device.json` (device keypair), and the reply hint injected into the session names `$OPENCLAW_HOME/workspace/send-to-triologue.sh`. The two files are read when the OpenClaw bridge/inject module is loaded or constructed (restart to change them), the reply hint is resolved per message; unset or blank keeps the default, so existing deployments need no change |
 | `OPENCLAW_GATEWAY_TOKEN` | - | OpenClaw gateway token, used by `openclaw-inject` delivery only when `$OPENCLAW_HOME/openclaw.json` cannot be read |
@@ -27,7 +28,8 @@ exits if its first connection to Triologue fails.
 
 - The account must be a Triologue user named `gateway` or `gateway-agent-001`
   with an active BYOA token, and `GATEWAY_USERNAME` must be that exact
-  username.
+  username. Give the user the id `gateway-system` (see the last point of this
+  list for why).
 - Triologue serves the agent sync (`GET /api/agents/gateway-config`) and token
   rotation only to these accounts. With any other account the sync fails with
   `403`, and the gateway routes only the agents from `AGENTS_CONFIG` (none if that
@@ -44,6 +46,21 @@ exits if its first connection to Triologue fails.
   account to each new room yourself. A room the gateway account is
   added to in any other way takes effect after a reconnect or restart, because
   the gateway joins its rooms only when it connects to Triologue.
+
+Setting the account up is a manual step on the Triologue server, because
+neither sign-up nor Settings → My Agents can create it:
+
+1. Create a user with the username `gateway` (or `gateway-agent-001`), and
+   with the id `gateway-system` so that Triologue adds it to new rooms and
+   project rooms by itself. With any other id, add the account to every room
+   you want relayed by hand.
+2. Give that user an active BYOA token, and put the token in `GATEWAY_TOKEN`
+   and the exact username in `GATEWAY_USERNAME`.
+3. Add the account as a participant of every room that already exists and
+   should be relayed.
+4. Start or restart the gateway. It joins its rooms only when it connects, so
+   after adding the account to a room later, restart the gateway or let it
+   reconnect.
 
 ## Delivery modes
 

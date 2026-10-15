@@ -84,7 +84,7 @@ Task: Fix the thing
 PR: https://github.com/owner/repo/pull/42
 Actor: Lan (human)
 Assignee: Reviewer Bot
-agent-tasks: https://agent-tasks.opentriologue.ai/projects/proj-1/tasks/task-1
+agent-tasks: https://agent-tasks.opentriologue.ai/tasks/task-1
 ```
 
 Emoji + headline by signal type:

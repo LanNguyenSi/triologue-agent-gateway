@@ -32,8 +32,8 @@ import type { TriologueConfig } from './types';
  * // List rooms
  * const rooms = await client.rooms.list();
  *
- * // Get agent info
- * const agent = await client.agents.info();
+ * // Public metadata of all active agents, keyed by user id
+ * const agents = await client.agents.info();
  * ```
  */
 export class Triologue {

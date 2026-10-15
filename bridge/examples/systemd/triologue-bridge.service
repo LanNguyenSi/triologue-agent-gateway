@@ -19,10 +19,11 @@ Environment="BYOA_TOKEN=byoa_REPLACE_ME"
 User=triologue-bridge
 Group=triologue-bridge
 
-# Adjust if `triologue-bridge` is not on the system PATH for the service
-# user, e.g. when installed via nvm or a private node_modules:
-# ExecStart=/usr/bin/node /opt/triologue-bridge/dist/index.js
-ExecStart=/usr/bin/env triologue-bridge
+# Runs the built bridge directly; adjust the path to your install. If you ran
+# `npm link` so that `triologue-bridge` is on the system PATH for the service
+# user, you can use this variant instead:
+# ExecStart=/usr/bin/env triologue-bridge
+ExecStart=/usr/bin/node /opt/triologue-bridge/dist/index.js
 
 # Graceful shutdown: SIGTERM first, then KILL after 10s if the process
 # has not exited cleanly.

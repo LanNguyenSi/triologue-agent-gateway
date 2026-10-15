@@ -5,13 +5,9 @@
  */
 
 import fs from 'fs';
-import path from 'path';
 import { fileURLToPath } from 'node:url';
 
-// __dirname has no ESM equivalent global (root package.json is
-// "type": "module"); derive it from import.meta.url the same way as the
-// module-is-main guard in index.ts.
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { stateFile } from './state-dir.js';
 
 interface MetricsData {
   timestamp: string;
@@ -43,7 +39,7 @@ class MetricsCollector {
   private flushInterval: NodeJS.Timeout | null = null;
   
   constructor() {
-    this.logPath = path.join(__dirname, '../metrics.jsonl');
+    this.logPath = stateFile('metrics.jsonl');
     
     this.data = {
       timestamp: new Date().toISOString(),
@@ -192,7 +188,7 @@ export const metrics = new MetricsCollector();
 // (`require` is undefined here); use the same process.argv[1] /
 // import.meta.url module-is-main comparison as index.ts's entrypoint guard.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const metricsPath = path.join(__dirname, '../metrics.jsonl');
+  const metricsPath = stateFile('metrics.jsonl');
   
   if (!fs.existsSync(metricsPath)) {
     console.log('No metrics data yet. Run the gateway first.');

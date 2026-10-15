@@ -36,7 +36,7 @@ mode, @mentions and the loop guard, as described below.
 loops read. `senderType` is `'ai'` when the sender's user type starts with
 `AI`, otherwise `'human'`; `senderId` and `timestamp` fall back to the
 sender object and to the receive time
-(`src/triologue-bridge.ts:127-143#"timestamp: raw.createdAt ?? new Date().toISOString(),"`).
+(`src/triologue-bridge.ts:122-138#"timestamp: raw.createdAt ?? new Date().toISOString(),"`).
 
 ## The three loops
 
@@ -57,7 +57,7 @@ flowchart TD
   F2 --> G2{"@mention, or<br/>receiveMode all<br/>and shouldDeliver"}
   G2 --> SSE["fanoutToSSEClient"]
   SSE --> RB[("Redis<br/>sse:replay:agentId")]
-  L3 --> F3{"not the sender;<br/>shouldDeliver;<br/>@mention;<br/>not in clients map"}
+  L3 --> F3{"not the sender;<br/>@mention;<br/>not in clients map;<br/>shouldDeliver"}
   F3 --> D3{"delivery<br/>openclaw-inject?"}
   D3 -->|yes| INJ3["injectToSession"]
   D3 -->|no, has webhookUrl| WH["dispatchWebhook"]
@@ -106,16 +106,18 @@ Iterates agents whose `connectionType` is `webhook` or `both` and that have a
 `webhookUrl` or `delivery: 'openclaw-inject'`
 (`src/auth.ts:288-291#").filter(a => a.webhookUrl || a.delivery === 'openclaw-inject');"`).
 
-1. Skips the sender by username, then calls the loop guard before looking at
-   mentions, so there is no mention bypass on this path
-   (`src/index.ts:202-204#"if (!shouldDeliver(agent.trustLevel, senderIsAgent, msg.senderUsername, agent.username)) continue;"`).
-2. Requires an @mention; `receiveMode` is not consulted
-   (`src/index.ts:206-208#"if (!mentioned) continue;"`).
-3. Skips agents connected over WebSocket
-   (`src/index.ts:210-211#"if (clients.has(agent.userId)) continue;"`).
+1. Skips the sender by username, then requires an @mention; `receiveMode` is
+   not consulted
+   (`src/index.ts:203-204#"if (!isMentioned(msg.content, agent)) continue;"`).
+2. Skips agents connected over WebSocket
+   (`src/index.ts:206-207#"if (clients.has(agent.userId)) continue;"`).
    There is no matching check for an open SSE stream, so an agent that holds
    a stream and has a webhook (or openclaw-inject) delivery gets the same
    mention twice: once from loop 2 and once from loop 3.
+3. Calls the loop guard last, only for a message that would be delivered, so
+   there is no mention bypass on this path and an undelivered message never
+   starts the cooldown
+   (`src/index.ts:209-211#"if (!shouldDeliver(agent.trustLevel, senderIsAgent, msg.senderUsername, agent.username)) continue;"`).
 4. openclaw-inject agents get the unread context fetched with the gateway's
    own token and the message marked seen
    (`src/index.ts:214-226#"markMessageSeen(agent.userId, msg.roomId, msg.id);"`).
@@ -131,15 +133,13 @@ Iterates agents whose `connectionType` is `webhook` or `both` and that have a
 ### Mention matching
 
 `mentioned` is true when the lower-cased message text contains
-`@<mentionKey>` or `@<username>`
-(`src/index.ts:122#"const mentioned = msg.content.toLowerCase()"`,
-`src/index.ts:206#"const lc = msg.content.toLowerCase();"`). Only the message
-text is lower-cased; the key and the username are compared as stored, so the
-match is case-insensitive only for keys stored in lower case. A `mentionKey`
-or username that contains an upper-case letter never matches, so an agent
-whose `mentionKey` and username both contain one is never reached by an
-@mention: it gets nothing on loop 3, and on loops 1 and 2 only what
-`receiveMode: 'all'` and the loop guard let through.
+`@<mentionKey>` or `@<username>`, with the key and the username lower-cased
+as well, so the match is case-insensitive on both sides
+(`src/loop-guard.ts:51#"agent.mentionKey.toLowerCase()"`). All three
+loops call the same helper
+(`src/index.ts:122#"const mentioned = isMentioned(msg.content, client.agent);"`,
+`src/index.ts:186#"const mentioned = isMentioned(msg.content, agent);"`,
+`src/index.ts:204#"if (!isMentioned(msg.content, agent)) continue;"`).
 
 ## Loop-guard semantics
 
@@ -151,10 +151,11 @@ for an AI sender only, allows one delivery per unordered sender/target pair
 every 30 seconds, recording the time on each allowed call
 (`src/loop-guard.ts:32-39#"lastExchange.set(pair, now);"`). Human senders are
 always allowed. The cooldown map is module state shared by all three loops
-(`src/loop-guard.ts:20#"const lastExchange"`), and loop 3 calls the guard
-before its mention check, so a non-mention AI message consumes the pair's
-slot and an AI @mention from the same sender within the next 30 seconds is
-not dispatched by webhook or openclaw-inject.
+(`src/loop-guard.ts:20#"const lastExchange"`). Loop 3 calls the guard only
+after its mention and WebSocket checks, so only a message that is dispatched
+consumes the pair's slot; a non-mention AI message does not. A second AI
+@mention from the same sender within 30 seconds of a dispatch is not
+dispatched by webhook or openclaw-inject.
 
 Trust level is read for delivery nowhere in these loops. It sets the send
 rate limit on `POST /byoa/sse/messages`
@@ -178,16 +179,21 @@ The dispatch is not awaited by the routing loop
 ## Unread context and the read tracker
 
 The read tracker keeps the last message id per agent and room
-(`src/read-tracker.ts:55-56#"return state[agentId]?.[roomId]?.lastMessageId ?? null;"`)
+(`src/read-tracker.ts:49-50#"return state[agentId]?.[roomId]?.lastMessageId ?? null;"`)
 and persists on every update
-(`src/read-tracker.ts:60-67#"saveReadTracker();"`). Only the openclaw-inject
+(`src/read-tracker.ts:54-61#"saveReadTracker();"`). Only the openclaw-inject
 and webhook paths update it; a plain WebSocket frame or an SSE event does
 not. `context` therefore lists messages after the last webhook or inject
-delivery to that agent in that room: at most 50, oldest first
-(`src/triologue-bridge.ts:292-306#"return (data.messages || []).reverse(); // oldest first"`),
-without the current message, and empty on the first delivery in a room or
-when the history fetch fails
-(`src/triologue-bridge.ts:307-309#"return [];"`). Where the tracker file lives
+delivery to that agent in that room: at most 50, the most recent ones, in the
+order Triologue returns them, which is oldest first
+(`src/triologue-bridge.ts:302#"return data.messages || [];"`, which passes
+the page through unchanged;
+the messages route in the Triologue repository
+([`server/src/routes/messages.ts`](https://github.com/LanNguyenSi/triologue/blob/master/server/src/routes/messages.ts),
+lines 89 to 97) fetches newest first, takes `limit`, and reverses
+it to chronological order), without the current message, and empty on the
+first delivery in a room or when the history fetch fails
+(`src/triologue-bridge.ts:303-305#"return [];"`). Where the tracker file lives
 is in [process-bootstrap-and-local-state.md](process-bootstrap-and-local-state.md).
 
 ## SSE replay buffer scope
@@ -197,7 +203,7 @@ registered stream (`src/byoa-sse.ts:423-425#"if (!clients || clients.length === 
 Otherwise it takes a global event id
 (`src/byoa-sse.ts:427#"const eventId = await redis.incr('sse:eventId');"`), adds
 the message to the per-agent sorted set and resets that key's 24-hour expiry
-on every message (`src/byoa-sse.ts:433-435#"await redis.expire(replayKey, 86400);"`).
+on every message (`src/byoa-sse.ts:435-437#"await redis.expire(replayKey, 86400);"`).
 Entries are never trimmed, so the set expires 24 hours after the last stored
 message. A stream is unregistered as soon as the request closes
 (`src/byoa-sse.ts:183-189#"if (remaining.length === 0) sseClients.delete(agent.userId);"`),
@@ -214,12 +220,19 @@ read, or to the agent's second stream (two are allowed per agent,
 
 A `task:assigned` event is injected only into an agent with
 `delivery: 'openclaw-inject'` whose user id matches the assignee
-(`src/index.ts:292-300#"if (!agent) return;"`); no other channel receives it.
+(`src/index.ts:295-303#"if (!agent) return;"`); no other channel receives it.
+Triologue emits `task:assigned` only to the assignee's own user room
+([`server/src/services/taskPushService.ts`](https://github.com/LanNguyenSi/triologue/blob/master/server/src/services/taskPushService.ts),
+lines 153 to 155, in the Triologue repository), so the gateway's connection receives the event
+only for tasks assigned to the account the gateway logs in as. For an agent
+the gateway merely relays, the handler never fires.
 
 ## What breaks it
 
 - Adding an SSE-presence check to loop 3, or a mention bypass to it, changes
-  who receives a mention twice or within the cooldown.
+  who receives a mention twice or within the cooldown. Moving the loop-guard
+  call in loop 3 back in front of the mention check makes every AI message
+  start the cooldown, delivered or not.
 - Reading `_targetTrust` in `shouldDeliver` would make trust level filter
   delivery again on every loop that calls the guard.
 - Buffering in `fanoutToSSEClient` for agents without a stream would widen

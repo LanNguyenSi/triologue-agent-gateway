@@ -196,6 +196,28 @@ describe('byoa-mcp tool dispatch', () => {
     );
   });
 
+  it('get_room_messages accepts limit 100 and rejects 101 (Triologue caps a page at 100)', async () => {
+    bridgeMock.fetchMessagesSince.mockReset().mockResolvedValue([]);
+    const call = (limit: number) =>
+      mcpRequest(
+        {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'get_room_messages', arguments: { room_id: 'room-3', limit } },
+        },
+        { Authorization: 'Bearer good_token' },
+      );
+
+    await call(100);
+    expect(bridgeMock.fetchMessagesSince).toHaveBeenCalledTimes(1);
+    expect(bridgeMock.fetchMessagesSince).toHaveBeenLastCalledWith('good_token', 'room-3', null, 100);
+
+    await call(101);
+    // MUTATION GUARD: raising the schema max back to 200 lets 101 through; fails
+    expect(bridgeMock.fetchMessagesSince).toHaveBeenCalledTimes(1);
+  });
+
   it('get_room_messages defaults limit to 50 and after_message_id to null when omitted', async () => {
     bridgeMock.fetchMessagesSince.mockResolvedValue([]);
     await mcpRequest(

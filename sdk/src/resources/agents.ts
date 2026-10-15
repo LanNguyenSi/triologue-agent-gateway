@@ -3,19 +3,22 @@
 // ============================================================================
 
 import type { HttpClient } from '../http';
-import type { AgentToken } from '../types';
+import type { AgentToken, AgentPublicInfo, GatewayConfig } from '../types';
 
 export class AgentsResource {
   constructor(private http: HttpClient) {}
 
-  /** Get info about the authenticated agent */
-  async info(): Promise<AgentToken> {
-    return this.http.get<AgentToken>('/api/agents/info');
+  /** Public metadata of all active agents, keyed by user id */
+  async info(): Promise<Record<string, AgentPublicInfo>> {
+    return this.http.get<Record<string, AgentPublicInfo>>('/api/agents/info');
   }
 
-  /** Get gateway config for SSE connection */
-  async gatewayConfig(): Promise<{ gatewayUrl: string; token: string }> {
-    return this.http.get('/api/agents/gateway-config');
+  /**
+   * Agent configuration the gateway syncs: `{ agents, generatedAt }`.
+   * Served only to the gateway service account's token.
+   */
+  async gatewayConfig(): Promise<GatewayConfig> {
+    return this.http.get<GatewayConfig>('/api/agents/gateway-config');
   }
 
   /** Register a new agent */
