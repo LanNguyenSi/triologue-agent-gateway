@@ -20,24 +20,37 @@ function makeHttp() {
 describe('AgentsResource', () => {
   it('info() → GET /api/agents/info', async () => {
     const http = makeHttp();
-    http.get.mockResolvedValue({ token: 't', name: 'Bot' });
+    const byUserId = {
+      'user-1': {
+        username: 'bot',
+        displayName: 'Bot',
+        mentionKey: 'bot',
+        emoji: '🤖',
+        color: '#888888',
+        trustLevel: 'standard' as const,
+      },
+    };
+    http.get.mockResolvedValue(byUserId);
     const agents = new AgentsResource(http);
 
     const result = await agents.info();
 
     expect(http.get).toHaveBeenCalledWith('/api/agents/info');
-    expect(result).toEqual({ token: 't', name: 'Bot' });
+    expect(result['user-1'].mentionKey).toBe('bot');
+    expect(result).toEqual(byUserId);
   });
 
   it('gatewayConfig() → GET /api/agents/gateway-config', async () => {
     const http = makeHttp();
-    http.get.mockResolvedValue({ gatewayUrl: 'wss://gw', token: 't' });
+    const config = { agents: [], generatedAt: '2000-01-01T00:00:00.000Z' };
+    http.get.mockResolvedValue(config);
     const agents = new AgentsResource(http);
 
     const result = await agents.gatewayConfig();
 
     expect(http.get).toHaveBeenCalledWith('/api/agents/gateway-config');
-    expect(result).toEqual({ gatewayUrl: 'wss://gw', token: 't' });
+    expect(result.generatedAt).toBe('2000-01-01T00:00:00.000Z');
+    expect(result).toEqual(config);
   });
 
   it('register(data) → POST /api/agents with the body', async () => {

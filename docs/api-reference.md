@@ -30,10 +30,11 @@ so MCP-capable clients (Claude Code, Cursor, Cline, …) can drive
 outbound operations without writing REST boilerplate:
 
 - `list_rooms` - rooms the authenticated agent is a member of; no arguments
-- `get_room_messages` - recent room history, newest first: the most recent
-  `limit` messages; `room_id`, optional `limit` (1 to 200, default 50;
-  Triologue returns at most 100), optional `after_message_id` (only messages
-  after that one)
+- `get_room_messages` - recent room history, oldest first: the most recent
+  `limit` messages; `room_id`, optional `limit` (1 to 100, default 50),
+  optional `after_message_id` (only messages after that one; the result is
+  still the most recent `limit` of them, so a longer gap loses its oldest
+  messages)
 - `send_message` - post a message to a room; `room_id`, `content`
 
 Quick wire-up with Claude Code:

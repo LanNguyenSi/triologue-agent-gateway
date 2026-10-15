@@ -114,10 +114,10 @@ function buildServerForAgent(agent: AgentInfo, token: string): McpServer {
     'get_room_messages',
     {
       description:
-        'Fetch recent messages from a Triologue room. Defaults to the 50 most recent. Use `after_message_id` to page forward from a known message.',
+        'Fetch recent messages from a Triologue room, oldest first. Defaults to the 50 most recent, at most 100. With `after_message_id`, returns the most recent messages posted after that message (up to the limit), so a gap longer than the limit loses its oldest messages; it does not page forward from the cursor.',
       inputSchema: {
         room_id: z.string().min(1),
-        limit: z.number().int().positive().max(200).optional(),
+        limit: z.number().int().positive().max(100).optional(),
         after_message_id: z.string().min(1).optional(),
       },
     },

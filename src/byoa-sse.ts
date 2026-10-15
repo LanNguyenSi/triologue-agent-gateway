@@ -426,10 +426,12 @@ export async function fanoutToSSEClient(agentId: string, message: AgentMessage):
 
   const eventId = await redis.incr('sse:eventId');
 
-  // Persist per recipient for Last-Event-ID resume (24h TTL). This function is
-  // only invoked for agents that already passed the live-delivery filter, so a
-  // per-agent key contains exactly the messages this agent was authorized to
-  // receive. Replay reads this key only, preventing cross-room/tenant leakage.
+  // Persist per recipient for Last-Event-ID resume (24h TTL). Only agents with
+  // an open stream are buffered: the early return above skips everyone else, so
+  // a message that arrives while the agent has no stream is not stored. This
+  // function is only invoked for agents that already passed the live-delivery
+  // filter, so a per-agent key contains exactly the messages this agent was
+  // authorized to receive. Replay reads this key only, preventing cross-room/tenant leakage.
   const replayKey = `sse:replay:${agentId}`;
   await redis.zadd(replayKey, eventId, JSON.stringify({ ...message, eventId }));
   await redis.expire(replayKey, 86400);

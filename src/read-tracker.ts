@@ -4,19 +4,13 @@
  * Tracks the last message ID each agent has seen in each room.
  * Used to fetch unread messages when an agent is mentioned.
  *
- * Storage: .read-tracker.json in gateway root directory
+ * Storage: .read-tracker.json in the state directory (STATE_DIR, default: gateway root)
  */
 
 import * as fs from 'fs';
-import * as path from 'path';
-import { fileURLToPath } from 'node:url';
+import { stateFile } from './state-dir.js';
 
-// __dirname has no ESM equivalent global (root package.json is
-// "type": "module"); derive it from import.meta.url the same way as the
-// module-is-main guard in index.ts.
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-const TRACKER_FILE = path.join(__dirname, '..', '.read-tracker.json');
+const TRACKER_FILE = stateFile('.read-tracker.json');
 
 interface ReadState {
   [agentId: string]: {

@@ -17,7 +17,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAgentByUsername, getAllAgents, startSync, stopSync } from './auth.js';
 import { dispatchWebhook } from './webhook-dispatch.js';
 import { TriologueBridge } from './triologue-bridge.js';
-import { shouldDeliver } from './loop-guard.js';
+import { shouldDeliver, isMentioned } from './loop-guard.js';
 import { injectToSession } from './openclaw-inject.js';
 import { openClawReplyHint } from './openclaw-paths.js';
 import { loadReadTracker, getLastSeenMessageId, markMessageSeen } from './read-tracker.js';
@@ -119,7 +119,7 @@ bridge.onMessage(async (msg) => {
     if (client.agent.userId === msg.senderId) continue;
 
     // receiveMode check (before loop guard — @mentions always get through)
-    const mentioned = msg.content.toLowerCase().includes(`@${client.agent.mentionKey}`) || msg.content.toLowerCase().includes(`@${client.agent.username}`);
+    const mentioned = isMentioned(msg.content, client.agent);
     if (client.agent.receiveMode === 'mentions' && !mentioned) continue;
 
     // Loop guard (skip for direct @mentions — user explicitly wants this agent)
@@ -183,7 +183,7 @@ bridge.onMessage(async (msg) => {
     // Don't double-deliver to WS+SSE
     if (clients.has(agent.userId)) continue;
 
-    const mentioned = msg.content.toLowerCase().includes(`@${agent.mentionKey}`) || msg.content.toLowerCase().includes(`@${agent.username}`);
+    const mentioned = isMentioned(msg.content, agent);
     if (agent.receiveMode === 'mentions' && !mentioned) continue;
     if (!mentioned && !shouldDeliver(agent.trustLevel, senderIsAgent, msg.senderUsername, agent.username)) continue;
 
@@ -201,14 +201,14 @@ bridge.onMessage(async (msg) => {
   // ── Non-WebSocket agents: dispatch on @mention via webhook or openclaw-inject ──
   for (const agent of getWebhookAgents()) {
     if (agent.username === msg.senderUsername) continue;
-    if (!shouldDeliver(agent.trustLevel, senderIsAgent, msg.senderUsername, agent.username)) continue;
-
-    const lc = msg.content.toLowerCase();
-    const mentioned = lc.includes(`@${agent.mentionKey}`) || lc.includes(`@${agent.username}`);
-    if (!mentioned) continue;
+    if (!isMentioned(msg.content, agent)) continue;
 
     // Don't dispatch if agent is connected via WebSocket (already got it)
     if (clients.has(agent.userId)) continue;
+
+    // Last gate: shouldDeliver records the 30s cooldown for an AI sender, so
+    // it only runs once the message is actually going to be delivered.
+    if (!shouldDeliver(agent.trustLevel, senderIsAgent, msg.senderUsername, agent.username)) continue;
 
     // ── OpenClaw inject: inject directly into local OpenClaw session ──
     if (agent.delivery === 'openclaw-inject') {
@@ -289,6 +289,9 @@ bridge.onMessage(async (msg) => {
 });
 
 // ── task:assigned → inject into OpenClaw session ──────────────────────────
+// Triologue emits task:assigned only to the assignee's own user room, so this
+// handler fires only for tasks assigned to the account the gateway logs in as
+// (GATEWAY_USERNAME), not for agents the gateway merely relays.
 bridge.onTaskAssigned(async (payload: any) => {
   const assignedTo = payload.assignedTo ?? payload.task?.assignedTo;
   if (!assignedTo) return;

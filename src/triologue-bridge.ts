@@ -14,14 +14,9 @@
 import { io as SocketIOClient, Socket } from 'socket.io-client';
 import axios from 'axios';
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'node:url';
 import type { AgentInfo } from './types.js';
 
-// __dirname has no ESM equivalent global (root package.json is
-// "type": "module"); derive it from import.meta.url the same way as the
-// module-is-main guard in index.ts.
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { stateFile } from './state-dir.js';
 
 export interface BridgeConfig {
   trioUrl: string;        // http://localhost:4001
@@ -59,7 +54,7 @@ export class TriologueBridge {
 
   constructor(config: BridgeConfig) {
     this.config = config;
-    this.cachePath = path.join(__dirname, '../.jwt-cache-gateway.json');
+    this.cachePath = stateFile('.jwt-cache-gateway.json');
   }
 
   onMessage(cb: MessageCallback): void {
@@ -303,7 +298,8 @@ export class TriologueBridge {
       });
 
       // Triologue returns { messages: [...], hasMore, nextCursor, total }
-      return (data.messages || []).reverse(); // oldest first
+      // Triologue already returns the page oldest first, so no reordering.
+      return data.messages || [];
     } catch (err: any) {
       console.error(`❌ Failed to fetch messages from ${roomId}: ${err.message}`);
       return [];

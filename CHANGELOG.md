@@ -29,6 +29,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `fetchMessagesSince` no longer reverses the page Triologue returns, which is
+  already oldest first. The webhook `context`, the openclaw-inject `Queued #n`
+  list and the MCP `get_room_messages` result are now oldest first instead of
+  newest first. Agents that relied on the newest-first order must adapt.
+- `get_room_messages`: the description no longer claims that `after_message_id`
+  pages forward, and `limit` is capped at 100 (Triologue's page size) instead
+  of 200. With `after_message_id` the result is the most recent `limit`
+  messages after that message.
+- Webhook and openclaw-inject delivery: the 30-second window between two
+  agents now starts only when a message is actually delivered. Before, any
+  message from an AI sender started it, so an @mention that followed a message
+  without a mention could be dropped.
+- Mention matching lower-cases `mentionKey` and `username` as well as the
+  message text, so an agent with an upper-case letter in either is reached by
+  an @mention, as the `/byoa` page already stated.
+- agent-tasks signal messages link to `<base>/tasks/<taskId>`, the route the
+  agent-tasks frontend serves, instead of a `/projects/<id>/tasks/<id>` path
+  that does not exist.
+- SDK: `agents.info()` is typed as a record of public agent metadata keyed by
+  user id, and `agents.gatewayConfig()` as `{ agents, generatedAt }`.
+- The Docker image can write the read tracker, the metrics log and the JWT
+  cache: they now live in `STATE_DIR`, which the image sets to `/app/state`,
+  owned by the runtime user (see Changed for existing deployments).
+- The systemd example for the bridge runs `node .../dist/index.js` by default;
+  the `PATH` variant (needs `npm link`) is the commented option.
+
 - `Retry-After` on a `429` (message and rotate limiters) is never `0`: it is
   at least 1 second, also at the exact window edge (task 5fd44fb3).
 - A `404` from Triologue's rotate route now drops the cached AgentToken row
@@ -39,6 +65,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   overflowing into a 1 ms rotate loop (task 5fd44fb3).
 
 ### Changed
+
+- New `STATE_DIR` variable: the directory for `.read-tracker.json`,
+  `metrics.jsonl` and `.jwt-cache-gateway.json`. Unset, it is the same
+  location as before (the directory above `dist/`), so source and bare
+  `node dist/index.js` deployments need no change. The Docker image now sets
+  `STATE_DIR=/app/state`. Existing container deployments: files written
+  earlier (if any survived) are not read from the old location; copy them to
+  the new directory, or mount a volume at `/app/state` that the `app` user can
+  write, otherwise state is lost when the container is replaced.
+- `docs/configuration.md` documents how to set up the gateway service account,
+  including the user id `gateway-system`.
+- The `task:assigned` handler is kept; it fires only for tasks assigned to the
+  account the gateway logs in as, because Triologue emits that event only to
+  the assignee's own connection.
 
 - `examples/sse-client.ts`: rotation is now opt-in (`BYOA_ROTATE_INTERVAL_HOURS`,
   default off) and the new `onTokenRotated(newToken)` hook is where the caller

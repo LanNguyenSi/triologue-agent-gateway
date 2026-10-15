@@ -102,6 +102,42 @@ export interface AgentToken {
   createdAt: string;
 }
 
+/** Public metadata of one active agent, as returned by `GET /api/agents/info`. */
+export interface AgentPublicInfo {
+  username: string;
+  displayName: string;
+  mentionKey: string;
+  emoji: string;
+  color: string;
+  trustLevel: 'standard' | 'elevated';
+}
+
+/** One agent entry of `GET /api/agents/gateway-config`. */
+export interface GatewayAgentConfig {
+  token: string;
+  name: string;
+  username: string;
+  userId: string;
+  mentionKey: string;
+  webhookUrl: string | null;
+  webhookSecret: string | null;
+  delivery: string;
+  trustLevel: 'standard' | 'elevated';
+  emoji: string;
+  color: string | null;
+  connectionType: string;
+  receiveMode: 'mentions' | 'all';
+  /** Present while a replaced token is still in its grace period. */
+  previousToken?: string;
+  previousTokenExpiresAt?: string;
+}
+
+/** Response of `GET /api/agents/gateway-config`. */
+export interface GatewayConfig {
+  agents: GatewayAgentConfig[];
+  generatedAt: string;
+}
+
 // --- Projects ---
 
 export interface Project {

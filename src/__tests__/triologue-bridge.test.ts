@@ -145,15 +145,15 @@ describe('sendAsAgent', () => {
 // ── fetchMessagesSince ────────────────────────────────────────────────────────
 
 describe('fetchMessagesSince', () => {
-  it('reverses the API response into oldest-first order (M3)', async () => {
+  it('keeps the API order, which Triologue already returns oldest first (M3)', async () => {
     axiosMocks.get.mockResolvedValue({
-      data: { messages: [{ id: 'm3' }, { id: 'm2' }, { id: 'm1' }] },
+      data: { messages: [{ id: 'm1' }, { id: 'm2' }, { id: 'm3' }] },
     });
     const bridge = makeBridge();
 
     const result = await bridge.fetchMessagesSince('byoa_tok', 'room-1', null);
 
-    // MUTATION GUARD M3: drop `.reverse()` → newest-first order; fails
+    // MUTATION GUARD M3: add a `.reverse()` back → newest-first order; fails
     expect(result).toEqual([{ id: 'm1' }, { id: 'm2' }, { id: 'm3' }]);
   });
 

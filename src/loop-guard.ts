@@ -41,3 +41,12 @@ export function shouldDeliver(
 
   return true;
 }
+
+/**
+ * Case-insensitive @mention check: the message text, the mention key and the
+ * username are all lowercased, so a mixed-case key or username still matches.
+ */
+export function isMentioned(content: string, agent: { mentionKey: string; username: string }): boolean {
+  const lc = content.toLowerCase();
+  return lc.includes(`@${agent.mentionKey.toLowerCase()}`) || lc.includes(`@${agent.username.toLowerCase()}`);
+}

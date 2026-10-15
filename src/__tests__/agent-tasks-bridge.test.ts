@@ -152,7 +152,7 @@ describe('formatSignalMessage', () => {
     expect(out).toContain('Task: Fix the thing');
     expect(out).toContain('PR: https://github.com/owner/repo/pull/42');
     expect(out).toContain('Actor: Lan (human)');
-    expect(out).toContain('agent-tasks: https://agent-tasks.example/projects/proj-1/tasks/task-1');
+    expect(out).toContain('agent-tasks: https://agent-tasks.example/tasks/task-1');
   });
 
   const types: AgentTasksSignalType[] = [

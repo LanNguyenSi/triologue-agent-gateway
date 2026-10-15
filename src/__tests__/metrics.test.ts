@@ -1,10 +1,9 @@
 /**
  * Tests for src/metrics.ts (MetricsCollector singleton).
  *
- * `fs` is mocked so flush()/shutdown() never touch real disk - the module
- * computes its log path from `__dirname` at construction time, which is
- * not configurable (no seam), so real writes must be prevented at the fs
- * boundary instead.
+ * `fs` is mocked so flush()/shutdown() never touch real disk. The log path
+ * resolves through STATE_DIR (via src/state-dir.ts) at module load, so the
+ * fs mock is still what keeps the tests off the real disk.
  *
  * `metrics` is a singleton constructed once at module import, so tests
  * snapshot the delta each method call produces relative to whatever state
