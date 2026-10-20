@@ -89,6 +89,31 @@ point it at your build. If you ran `npm link` and `triologue-bridge` is on the
 service user's `PATH`, switch to the commented
 `ExecStart=/usr/bin/env triologue-bridge` line.
 
+## Child environment
+
+Each `claude -p` run starts with an environment built from an explicit
+allowlist, not a copy of the bridge's environment. Only exact names are
+copied (no prefix matching), and only when they are set in the bridge process;
+an unset name is absent in the child, not an empty string. The list is the
+exported `CLAUDE_CHILD_ENV_ALLOWLIST` constant in
+[`src/claude-runner.ts`](src/claude-runner.ts):
+
+| Group              | Names                                                                                         |
+| ------------------ | --------------------------------------------------------------------------------------------- |
+| Process basics     | `PATH` `HOME` `USER` `LOGNAME` `SHELL` `TERM` `LANG` `TZ` `TMPDIR`                            |
+| Locale             | `LC_ALL` `LC_CTYPE` `LC_MESSAGES`                                                             |
+| Proxy              | `HTTP_PROXY` `HTTPS_PROXY` `NO_PROXY` `ALL_PROXY` (and the lowercase forms)                   |
+| CA bundles         | `SSL_CERT_FILE` `SSL_CERT_DIR` `NODE_EXTRA_CA_CERTS`                                          |
+| XDG directories    | `XDG_CONFIG_HOME` `XDG_DATA_HOME` `XDG_STATE_HOME` `XDG_CACHE_HOME` `XDG_RUNTIME_DIR`         |
+| Claude credentials | `ANTHROPIC_API_KEY` `ANTHROPIC_AUTH_TOKEN` `CLAUDE_CODE_OAUTH_TOKEN`                          |
+
+Authentication: a file-based login (credentials stored under `HOME` by
+`claude login`) keeps working because `HOME` is passed through. If the host
+authenticates `claude` with an environment variable, it must be one of the
+three credential names above and must be set in the bridge's own environment
+(for example in the systemd unit). Any other variable the `claude` binary
+needs, such as a cloud-provider credential, is not passed on.
+
 ## Edge-case handling
 
 - **Serial execution** — one Claude run at a time. Bursts of matched
@@ -121,8 +146,11 @@ service user's `PATH`, switch to the commented
   `~/.claude.json` or any other persistent MCP registry, so multiple
   agents can coexist on the same machine without clobbering each
   other's configs.
-- Claude runs inherit your user's environment. Do NOT run the bridge
-  as root.
+- Claude runs do NOT inherit the bridge's environment. The child gets only
+  an explicit allowlist of variable names (see [Child environment](#child-environment)),
+  so tokens for other services in the bridge's environment (including the
+  bridge's own `BYOA_TOKEN`) never reach the model session. The run still
+  executes as your user with your `HOME`, so do NOT run the bridge as root.
 
 ## Development
 

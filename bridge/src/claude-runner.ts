@@ -46,6 +46,75 @@ import type { IncomingMessage, AgentIdentity } from './mention.js';
  */
 export const STDIO_DRAIN_GRACE_MS = 2_000;
 
+/**
+ * Exact environment variable names the spawned `claude -p` child may
+ * inherit from the bridge process. Everything else (tracker tokens,
+ * GitHub tokens, other providers' API keys, the bridge's own BYOA_TOKEN)
+ * stays out of the model session, which runs with
+ * `--permission-mode bypassPermissions`.
+ *
+ * Exact names only: no prefix matching, no `process.env` spread. A name
+ * is copied only when it is set in the bridge process. The list is
+ * documented for operators in bridge/README.md ("Child environment").
+ */
+export const CLAUDE_CHILD_ENV_ALLOWLIST: readonly string[] = [
+  // Process basics
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'TERM',
+  'LANG',
+  'TZ',
+  'TMPDIR',
+  // Locale
+  'LC_ALL',
+  'LC_CTYPE',
+  'LC_MESSAGES',
+  // Proxy
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'ALL_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'all_proxy',
+  // CA bundles
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'NODE_EXTRA_CA_CERTS',
+  // XDG base directories
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_STATE_HOME',
+  'XDG_CACHE_HOME',
+  'XDG_RUNTIME_DIR',
+  // Credentials `claude -p` authenticates with (file-based login under
+  // HOME needs none of these)
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+];
+
+/**
+ * Build the child environment from the allowlist. Copies each allowlisted
+ * name that is set in `source` (an empty string counts as set) and nothing
+ * else; a name that is unset in `source` is absent from the result, never
+ * an empty string.
+ */
+export function buildClaudeEnv(
+  source: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const name of CLAUDE_CHILD_ENV_ALLOWLIST) {
+    const value = source[name];
+    if (value !== undefined) env[name] = value;
+  }
+  return env;
+}
+
 export interface RunRequest {
   message: IncomingMessage;
   agent: AgentIdentity;
@@ -179,6 +248,10 @@ export async function runClaude(
     //                                    calling Bash / Write / any
     //                                    other built-in tool still
     //                                    needs explicit permission.
+    //
+    //   env: buildClaudeEnv()          — the child gets only the
+    //                                    allowlisted variable names, not
+    //                                    the bridge's whole environment.
     const child = spawn(
       cfg.claudeCmd,
       [
@@ -196,7 +269,7 @@ export async function runClaude(
         '--allowedTools',
         'mcp__triologue-gateway__send_message',
       ],
-      { stdio: ['ignore', 'pipe', 'pipe'] },
+      { stdio: ['ignore', 'pipe', 'pipe'], env: buildClaudeEnv() },
     );
 
     const stdoutChunks: Buffer[] = [];

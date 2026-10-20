@@ -40,7 +40,7 @@ vi.mock('node:fs/promises', () => fsMocks);
 const spawnMock = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', () => ({ spawn: spawnMock }));
 
-const { buildMcpConfig, buildPrompt, runClaude } = await import('../src/claude-runner.js');
+const { buildClaudeEnv, buildMcpConfig, buildPrompt, runClaude } = await import('../src/claude-runner.js');
 
 // ── Mock child process ───────────────────────────────────────────────────────
 
@@ -228,7 +228,7 @@ describe('runClaude - success', () => {
         'mcp__triologue-gateway__send_message',
       ].sort(),
     );
-    expect(opts).toEqual({ stdio: ['ignore', 'pipe', 'pipe'] });
+    expect(opts).toEqual({ stdio: ['ignore', 'pipe', 'pipe'], env: buildClaudeEnv() });
   });
 
   it('writes the mcp config file with mode 0600 (M7)', async () => {
