@@ -115,6 +115,22 @@ describe('buildClaudeEnv', () => {
     });
   });
 
+  it('pins the exact allowlist, written out literally', () => {
+    // Adding or removing a name must be a deliberate edit of this list and
+    // of the README table. Guards against a dropped process-basics name
+    // and against a sensitive name slipping into the list.
+    const EXPECTED = [
+      'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TERM', 'LANG', 'TZ', 'TMPDIR',
+      'LC_ALL', 'LC_CTYPE', 'LC_MESSAGES',
+      'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY',
+      'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy',
+      'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+      'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_CACHE_HOME', 'XDG_RUNTIME_DIR',
+      'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN',
+    ];
+    expect([...CLAUDE_CHILD_ENV_ALLOWLIST].sort()).toEqual([...EXPECTED].sort());
+  });
+
   it('names the credentials claude -p authenticates with', () => {
     expect(CLAUDE_CHILD_ENV_ALLOWLIST).toEqual(
       expect.arrayContaining(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'HOME', 'PATH']),

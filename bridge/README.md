@@ -107,12 +107,15 @@ exported `CLAUDE_CHILD_ENV_ALLOWLIST` constant in
 | XDG directories    | `XDG_CONFIG_HOME` `XDG_DATA_HOME` `XDG_STATE_HOME` `XDG_CACHE_HOME` `XDG_RUNTIME_DIR`         |
 | Claude credentials | `ANTHROPIC_API_KEY` `ANTHROPIC_AUTH_TOKEN` `CLAUDE_CODE_OAUTH_TOKEN`                          |
 
-Authentication: a file-based login (credentials stored under `HOME` by
-`claude login`) keeps working because `HOME` is passed through. If the host
-authenticates `claude` with an environment variable, it must be one of the
-three credential names above and must be set in the bridge's own environment
-(for example in the systemd unit). Any other variable the `claude` binary
-needs, such as a cloud-provider credential, is not passed on.
+Authentication: the credentials stored for the user by `claude login` (files
+under `HOME`, or the login Keychain on macOS) keep working because `HOME` is
+passed through. If the host authenticates `claude` with an environment
+variable, it must be one of the three credential names above and must be set
+in the bridge's own environment (for example in the systemd unit). Any other
+variable the `claude` binary needs is not passed on: `ANTHROPIC_BASE_URL` and
+similar settings, a cloud-provider credential, `CLAUDE_CONFIG_DIR`. A host
+that needs such a setting puts it in Claude Code's user settings (the `env`
+block in the settings file under `HOME`).
 
 ## Edge-case handling
 
@@ -148,9 +151,15 @@ needs, such as a cloud-provider credential, is not passed on.
   other's configs.
 - Claude runs do NOT inherit the bridge's environment. The child gets only
   an explicit allowlist of variable names (see [Child environment](#child-environment)),
-  so tokens for other services in the bridge's environment (including the
-  bridge's own `BYOA_TOKEN`) never reach the model session. The run still
-  executes as your user with your `HOME`, so do NOT run the bridge as root.
+  so tokens for other services in the bridge's environment do not reach the
+  model session through its environment. This includes the `BYOA_TOKEN`
+  variable, which is not in the child's environment. The token value still
+  reaches the `claude` process by design: it is written as a Bearer header
+  into the per-run MCP config that the child loads (its path is in the
+  child's arguments), because it is the credential the session posts with.
+  The run uses `bypassPermissions` and executes as your user with your
+  `HOME`, so every file under `HOME` stays readable to it. Do NOT run the
+  bridge as root.
 
 ## Development
 

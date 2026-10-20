@@ -49,9 +49,10 @@ export const STDIO_DRAIN_GRACE_MS = 2_000;
 /**
  * Exact environment variable names the spawned `claude -p` child may
  * inherit from the bridge process. Everything else (tracker tokens,
- * GitHub tokens, other providers' API keys, the bridge's own BYOA_TOKEN)
- * stays out of the model session, which runs with
- * `--permission-mode bypassPermissions`.
+ * GitHub tokens, other providers' API keys, the bridge's own BYOA_TOKEN
+ * variable) stays out of the child's environment. The child runs with
+ * `--permission-mode bypassPermissions`; the BYOA token value still
+ * reaches it through the per-run MCP config by design.
  *
  * Exact names only: no prefix matching, no `process.env` spread. A name
  * is copied only when it is set in the bridge process. The list is
@@ -249,7 +250,7 @@ export async function runClaude(
     //                                    other built-in tool still
     //                                    needs explicit permission.
     //
-    //   env: buildClaudeEnv()          — the child gets only the
+    //   env: buildClaudeEnv()          : the child gets only the
     //                                    allowlisted variable names, not
     //                                    the bridge's whole environment.
     const child = spawn(
