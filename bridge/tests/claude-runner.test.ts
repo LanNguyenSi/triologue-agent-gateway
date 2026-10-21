@@ -216,7 +216,9 @@ describe('runClaude - success', () => {
     expect(args[args.indexOf('--mcp-config') + 1]).toBe('/tmp/triologue-bridge-fake/mcp.json');
     expect(args).toContain('--strict-mcp-config');
     expect(args).toContain('--permission-mode');
-    expect(args[args.indexOf('--permission-mode') + 1]).toBe('bypassPermissions');
+    expect(args[args.indexOf('--permission-mode') + 1]).toBe('dontAsk');
+    expect(args).toContain('--tools');
+    expect(args[args.indexOf('--tools') + 1]).toBe('');
     const allowedToolsIndices = args
       .map((a: string, i: number) => (a === '--allowedTools' ? i : -1))
       .filter((i: number) => i !== -1);

@@ -114,8 +114,42 @@ variable, it must be one of the three credential names above and must be set
 in the bridge's own environment (for example in the systemd unit). Any other
 variable the `claude` binary needs is not passed on: `ANTHROPIC_BASE_URL` and
 similar settings, a cloud-provider credential, `CLAUDE_CONFIG_DIR`. A host
-that needs such a setting puts it in Claude Code's user settings (the `env`
-block in the settings file under `HOME`).
+that needs `ANTHROPIC_BASE_URL` or a similar setting puts it in Claude Code's
+user settings (the `env` block in the user settings file under `HOME`; the
+run reads the user settings only). `CLAUDE_CONFIG_DIR` cannot be set that way:
+the settings file lives inside the configuration directory, so it cannot move
+the directory it is read from. Keep the login in the default configuration
+directory under `HOME` (run `claude login` as the user the bridge runs as), or
+authenticate with one of the three credential variables above.
+
+## Tool restriction
+
+A bridge run can call the three tools of the `triologue-gateway` MCP server
+(`list_rooms`, `get_room_messages`, `send_message`) and nothing else. The
+bridge starts `claude` with these flags (the exported `buildClaudeArgs` in
+[`src/claude-runner.ts`](src/claude-runner.ts) documents each one):
+
+| Flag                            | Effect                                                                                     |
+| ------------------------------- | ------------------------------------------------------------------------------------------ |
+| `--tools ""`                    | No built-in tool exists in the session (Bash, Read, Write, Edit, WebFetch, sub-agents, ...). A call fails with "No such tool"; no permission is involved. |
+| `--permission-mode dontAsk`     | Never prompts. Anything not explicitly allowed is denied, including a tool of another MCP server or an extra tool of the gateway server. |
+| `--permission-prompts none`     | A would-be permission prompt is denied instead of waiting on an input nobody answers.      |
+| `--allowedTools` (three times)  | Allows exactly the three gateway tools. Under `dontAsk` this is the whole allow list.      |
+| `--mcp-config` + `--strict-mcp-config` | Only the per-run gateway config is loaded, not the user's other MCP servers.        |
+| `--setting-sources user`        | Only the user settings are read. Project and local settings of the working directory are ignored; they can register hooks that run commands. |
+
+`--tools ""` sets the available built-in tools to none rather than listing
+tools to deny, so a built-in tool added by a later Claude Code release is not
+available to a bridge run either. The bridge does NOT use `bypassPermissions`:
+that mode allows every tool that exists, and `--allowedTools` does not narrow
+it, it only adds auto-approvals.
+
+This was checked against Claude Code 2.1.306: the flags need a `claude` that
+supports `--tools`, `dontAsk`, `--permission-prompts` and `--setting-sources`;
+an older binary exits with an error (logged at warn level) instead of running
+unrestricted. The user settings file under `HOME` is still read, so rules or
+hooks you put there apply to bridge runs; keep it free of both on a bridge
+host.
 
 ## Edge-case handling
 
@@ -157,9 +191,9 @@ block in the settings file under `HOME`).
   reaches the `claude` process by design: it is written as a Bearer header
   into the per-run MCP config that the child loads (its path is in the
   child's arguments), because it is the credential the session posts with.
-  The run uses `bypassPermissions` and executes as your user with your
-  `HOME`, so every file under `HOME` stays readable to it. Do NOT run the
-  bridge as root.
+  The run is also restricted in what it can call (see
+  [Tool restriction](#tool-restriction)); it still executes as your user with
+  your `HOME`. Do NOT run the bridge as root.
 
 ## Development
 

@@ -51,7 +51,7 @@ export const STDIO_DRAIN_GRACE_MS = 2_000;
  * inherit from the bridge process. Everything else (tracker tokens,
  * GitHub tokens, other providers' API keys, the bridge's own BYOA_TOKEN
  * variable) stays out of the child's environment. The child runs with
- * `--permission-mode bypassPermissions`; the BYOA token value still
+ * a restricted tool set (see `buildClaudeArgs`); the BYOA token value still
  * reaches it through the per-run MCP config by design.
  *
  * Exact names only: no prefix matching, no `process.env` spread. A name
@@ -114,6 +114,78 @@ export function buildClaudeEnv(
     if (value !== undefined) env[name] = value;
   }
   return env;
+}
+
+/**
+ * The only tools a bridge run may call: the three tools of the gateway MCP
+ * server. Names are `mcp__<server>__<tool>` as Claude Code derives them
+ * from the `triologue-gateway` key in `buildMcpConfig`.
+ */
+export const GATEWAY_TOOLS: readonly string[] = [
+  'mcp__triologue-gateway__list_rooms',
+  'mcp__triologue-gateway__get_room_messages',
+  'mcp__triologue-gateway__send_message',
+];
+
+/**
+ * Build the `claude` argument list. What each flag does, as observed with
+ * Claude Code 2.1.x:
+ *
+ *   -p <prompt>                      headless run, prints the result and exits.
+ *
+ *   --mcp-config <file>              load ONLY our per-run config, do not
+ *   --strict-mcp-config              merge with the user's other MCP servers.
+ *
+ *   --setting-sources user           read the user settings only. Project and
+ *                                    local settings come from the working
+ *                                    directory; a project settings file can
+ *                                    register hooks that run commands, so the
+ *                                    bridge does not depend on its cwd.
+ *
+ *   --tools ""                       remove EVERY built-in tool (Bash, Read,
+ *                                    Write, Edit, WebFetch, Task/Agent, ...)
+ *                                    from the session. This does not rely on
+ *                                    permissions: the tools do not exist, so
+ *                                    a call fails with "No such tool". It is
+ *                                    a set-the-available-tools flag, not a
+ *                                    deny list, so a built-in tool added by
+ *                                    a later Claude Code release is absent
+ *                                    too. MCP tools are not built-ins and
+ *                                    stay.
+ *
+ *   --permission-mode dontAsk        never prompt; anything not explicitly
+ *                                    allowed is denied. NOT bypassPermissions:
+ *                                    that mode allows every tool that exists
+ *                                    (including any other tool the gateway
+ *                                    server might expose) and --allowedTools
+ *                                    does not narrow it, it only adds
+ *                                    auto-approvals.
+ *
+ *   --permission-prompts none        belt to the mode: if anything would still
+ *                                    prompt, it is denied instead of waiting
+ *                                    on a stdin nobody answers.
+ *
+ *   --allowedTools <name> (x3)       auto-approve exactly the three gateway
+ *                                    tools. Under dontAsk this is the whole
+ *                                    allow list.
+ */
+export function buildClaudeArgs(prompt: string, mcpConfigPath: string): string[] {
+  return [
+    '-p',
+    prompt,
+    '--mcp-config',
+    mcpConfigPath,
+    '--strict-mcp-config',
+    '--setting-sources',
+    'user',
+    '--tools',
+    '',
+    '--permission-mode',
+    'dontAsk',
+    '--permission-prompts',
+    'none',
+    ...GATEWAY_TOOLS.flatMap((tool) => ['--allowedTools', tool]),
+  ];
 }
 
 export interface RunRequest {
@@ -220,56 +292,12 @@ export async function runClaude(
 
   const start = Date.now();
   try {
-    // Headless invocation needs three non-obvious flags to actually
-    // work in a daemon context:
-    //
-    //   --mcp-config <file>          — load ONLY our per-run config,
-    //   --strict-mcp-config             do not merge with ~/.claude.json
-    //                                   (avoids both leaking the user's
-    //                                   other MCP servers into the run
-    //                                   and a subtle footgun where a
-    //                                   stale global config shadows the
-    //                                   gateway binding).
-    //
-    //   --permission-mode              — without this, the first time
-    //     bypassPermissions              Claude tries to call an MCP
-    //                                    tool it prompts for permission
-    //                                    and hangs forever on stdin in
-    //                                    a non-interactive shell. The
-    //                                    tradeoff is explicit: the run
-    //                                    is allowed to call the gateway
-    //                                    tools without a human gate,
-    //                                    which is exactly the whole
-    //                                    point of the bridge.
-    //
-    //   --allowedTools <glob>          — narrows the permission bypass
-    //                                    to the three gateway tools
-    //                                    only, so a prompt-injection
-    //                                    that tricks Claude into
-    //                                    calling Bash / Write / any
-    //                                    other built-in tool still
-    //                                    needs explicit permission.
-    //
-    //   env: buildClaudeEnv()          : the child gets only the
-    //                                    allowlisted variable names, not
-    //                                    the bridge's whole environment.
+    // Flags and their effect: see buildClaudeArgs. The child gets only the
+    // allowlisted variable names (buildClaudeEnv), not the bridge's whole
+    // environment.
     const child = spawn(
       cfg.claudeCmd,
-      [
-        '-p',
-        prompt,
-        '--mcp-config',
-        mcpConfigPath,
-        '--strict-mcp-config',
-        '--permission-mode',
-        'bypassPermissions',
-        '--allowedTools',
-        'mcp__triologue-gateway__list_rooms',
-        '--allowedTools',
-        'mcp__triologue-gateway__get_room_messages',
-        '--allowedTools',
-        'mcp__triologue-gateway__send_message',
-      ],
+      buildClaudeArgs(prompt, mcpConfigPath),
       { stdio: ['ignore', 'pipe', 'pipe'], env: buildClaudeEnv() },
     );
 
