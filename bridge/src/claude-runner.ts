@@ -51,7 +51,7 @@ export const STDIO_DRAIN_GRACE_MS = 2_000;
  * inherit from the bridge process. Everything else (tracker tokens,
  * GitHub tokens, other providers' API keys, the bridge's own BYOA_TOKEN
  * variable) stays out of the child's environment. The child runs with
- * `--permission-mode bypassPermissions`; the BYOA token value still
+ * a restricted tool set (see `buildClaudeArgs`); the BYOA token value still
  * reaches it through the per-run MCP config by design.
  *
  * Exact names only: no prefix matching, no `process.env` spread. A name
