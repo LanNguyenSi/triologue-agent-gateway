@@ -241,6 +241,111 @@ describe('byoa-mcp tool dispatch', () => {
   });
 });
 
+describe('byoa-mcp input schema pins (zod 3 -> 4 migration)', () => {
+  // Each case pins one accept/reject decision of the two input schemas
+  // in byoa-mcp.ts. The schemas are z.string().min(1) and
+  // z.number().int().positive().max(100).optional(); these tests must
+  // pass unchanged under zod 3.25 and zod 4. The assertion is that the
+  // bridge is never reached and the SDK reports the argument block as
+  // invalid ("Invalid arguments for tool <name>" is the SDK's own
+  // prefix, stable across zod versions; the zod issue text after it is
+  // NOT pinned because zod 4 reworded default messages).
+  beforeEach(() => {
+    authenticateTokenMock.mockReturnValue(fakeAgent);
+  });
+
+  async function callTool(
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<{ status: number; body: { result?: { isError?: boolean; content?: Array<{ text: string }> } } }> {
+    const res = await mcpRequest(
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name, arguments: args },
+      },
+      { Authorization: 'Bearer good_token' },
+    );
+    expect(res.status).toBe(200);
+    return res as {
+      status: number;
+      body: { result?: { isError?: boolean; content?: Array<{ text: string }> } };
+    };
+  }
+
+  function expectArgumentReject(res: Awaited<ReturnType<typeof callTool>>, toolName: string): void {
+    expect(res.body.result?.isError).toBe(true);
+    expect(res.body.result?.content?.[0]?.text ?? '').toContain(
+      `Invalid arguments for tool ${toolName}`,
+    );
+  }
+
+  it('send_message rejects an empty content string (reject wins)', async () => {
+    const res = await callTool('send_message', { room_id: 'room-1', content: '' });
+    expectArgumentReject(res, 'send_message');
+    expect(bridgeMock.sendAsAgent).not.toHaveBeenCalled();
+  });
+
+  it('send_message rejects a missing content (reject wins)', async () => {
+    const res = await callTool('send_message', { room_id: 'room-1' });
+    expectArgumentReject(res, 'send_message');
+    expect(bridgeMock.sendAsAgent).not.toHaveBeenCalled();
+  });
+
+  it('send_message rejects an empty room_id (reject wins)', async () => {
+    const res = await callTool('send_message', { room_id: '', content: 'hi' });
+    expectArgumentReject(res, 'send_message');
+    expect(bridgeMock.sendAsAgent).not.toHaveBeenCalled();
+  });
+
+  it('get_room_messages rejects an empty room_id (reject wins)', async () => {
+    const res = await callTool('get_room_messages', { room_id: '' });
+    expectArgumentReject(res, 'get_room_messages');
+    expect(bridgeMock.fetchMessagesSince).not.toHaveBeenCalled();
+  });
+
+  it('get_room_messages rejects limit 0, positive is exclusive (reject wins)', async () => {
+    const res = await callTool('get_room_messages', { room_id: 'room-1', limit: 0 });
+    expectArgumentReject(res, 'get_room_messages');
+    expect(bridgeMock.fetchMessagesSince).not.toHaveBeenCalled();
+  });
+
+  it('get_room_messages rejects a negative limit (reject wins)', async () => {
+    const res = await callTool('get_room_messages', { room_id: 'room-1', limit: -3 });
+    expectArgumentReject(res, 'get_room_messages');
+    expect(bridgeMock.fetchMessagesSince).not.toHaveBeenCalled();
+  });
+
+  it('get_room_messages rejects a fractional limit (reject wins)', async () => {
+    const res = await callTool('get_room_messages', { room_id: 'room-1', limit: 1.5 });
+    expectArgumentReject(res, 'get_room_messages');
+    expect(bridgeMock.fetchMessagesSince).not.toHaveBeenCalled();
+  });
+
+  it('get_room_messages rejects a string limit (reject wins)', async () => {
+    const res = await callTool('get_room_messages', { room_id: 'room-1', limit: '10' });
+    expectArgumentReject(res, 'get_room_messages');
+    expect(bridgeMock.fetchMessagesSince).not.toHaveBeenCalled();
+  });
+
+  it('get_room_messages rejects an empty after_message_id (reject wins)', async () => {
+    const res = await callTool('get_room_messages', {
+      room_id: 'room-1',
+      after_message_id: '',
+    });
+    expectArgumentReject(res, 'get_room_messages');
+    expect(bridgeMock.fetchMessagesSince).not.toHaveBeenCalled();
+  });
+
+  it('get_room_messages accepts limit 1, the smallest positive integer (accept wins)', async () => {
+    bridgeMock.fetchMessagesSince.mockResolvedValue([]);
+    const res = await callTool('get_room_messages', { room_id: 'room-4', limit: 1 });
+    expect(res.body.result?.isError ?? false).toBe(false);
+    expect(bridgeMock.fetchMessagesSince).toHaveBeenCalledWith('good_token', 'room-4', null, 1);
+  });
+});
+
 describe('byoa-mcp method guard', () => {
   it('rejects GET /byoa/mcp with 405 without touching auth', async () => {
     const res = await fetch(baseUrl, { method: 'GET' });
