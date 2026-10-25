@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-25
+
 ### Security
 
 - **Bridge: `claude -p` child gets an allowlisted environment.** `bridge/src/claude-runner.ts` previously spawned the headless Claude run with the bridge's full environment, so tracker tokens, GitHub tokens and other providers' API keys were visible to the model session. The child now receives only the exact names in `CLAUDE_CHILD_ENV_ALLOWLIST` (process basics, locale, proxy, CA bundle and XDG names, plus `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`), each copied only when set. Deploy note: the credentials stored for the user by `claude login` (files under `HOME`, or the login Keychain on macOS) keep working. `ANTHROPIC_BASE_URL` and similar settings, `CLAUDE_CONFIG_DIR` and cloud-provider credentials are no longer passed; a host that needs `ANTHROPIC_BASE_URL` or a similar setting sets it in Claude Code's user settings (the `env` block in the user settings file under `HOME`), or moves to one of the three credential names or to `claude login`. `CLAUDE_CONFIG_DIR` cannot be set through the settings `env` block, because the settings file lives inside the directory it would have to move: keep the login in the default configuration directory under `HOME` (`claude login` as the bridge user) or use one of the credential variables. See `bridge/README.md` ("Child environment").
@@ -291,7 +293,8 @@ gateway started shipping.
   the auto-sync interval, trust levels, loop guard, metrics endpoint,
   and the terminal CLI.
 
-[Unreleased]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.2.3...v0.3.0
 [0.2.3]: https://github.com/LanNguyenSi/triologue-agent-gateway/compare/v0.2.2...v0.2.3
