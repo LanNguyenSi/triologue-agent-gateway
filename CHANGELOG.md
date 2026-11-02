@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Dependency updates: `renovate.json` extends the shared `github>LanNguyenSi/renovate-config` preset (weekly grouped patch/minor pull requests, 7-day minimum release age, no automerge, majors only through the Dependency Dashboard). The `overrides` entries that equal a direct dependency now reference it (`"ws": "$ws"` in `package.json`), so updating that dependency no longer fails with `EOVERRIDE`.
 - CI moves from Node 20 (EOL) to Node 22 and 24: the CI matrix is `[22.x, 24.x]` (22 is the production image and keeps the gated bridge, sdk-audit and pytest steps) and the audit workflow runs on 24.x. The production image stays on Node 22, the root `@types/node` follows it (`^22`), and the README prerequisites say Node 22 or 24. No code change was needed.
 
 ### Security
