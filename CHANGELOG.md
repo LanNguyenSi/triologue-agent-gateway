@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- CI moves from Node 20 (EOL) to Node 22 and 24: the CI matrix is `[22.x, 24.x]` (22 is the production image and keeps the gated bridge, sdk-audit and pytest steps) and the audit workflow runs on 24.x. The production image stays on Node 22, the root `@types/node` follows it (`^22`), and the README prerequisites say Node 22 or 24. No code change was needed.
+
 ### Security
 
 - **`@hono/node-server` 2.1.5** (GHSA-rmxm-3fg6-px4f): the lockfile resolves 2.1.5 (was 2.0.12), which fixes `serveStatic` decoding the request path a second time and so letting a request bypass middleware on static paths (affected: `>= 1.19.10, < 2.1.3`). Lockfile only, pulled in through `@modelcontextprotocol/sdk`, whose range is unchanged.
