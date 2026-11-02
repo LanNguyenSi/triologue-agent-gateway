@@ -24,7 +24,7 @@ room messages.
 
 ## Quick Start
 
-Prerequisites: Node.js 20 or 22, a Redis instance (`REDIS_URL`, default
+Prerequisites: Node.js 22 or 24, a Redis instance (`REDIS_URL`, default
 `redis://localhost:6379`), and a Triologue server (`TRIOLOGUE_URL`) with a
 gateway service account (see [docs/configuration.md](docs/configuration.md#gateway-account)).
 

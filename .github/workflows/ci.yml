@@ -18,9 +18,9 @@ jobs:
     
     strategy:
       matrix:
-        # Root has no engine constraint, so keep its Node 20 coverage. The
+        # Root has no engine constraint, so cover Node 22 (production) and 24. The
         # bridge steps below require Node >=22 (engines) and run only on 22.x.
-        node-version: [20.x, 22.x]
+        node-version: [22.x, 24.x]
 
     steps:
       - uses: actions/checkout@v5
