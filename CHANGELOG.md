@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- Runtime and CI move from Node 20 (EOL) to Node 24 LTS; `@types/node` ^24. Here: the CI matrix is `[22.x, 24.x]` (22 is the production image and keeps the gated bridge, sdk-audit and pytest steps), the audit workflow runs on 24.x, the root `@types/node` follows the Node 22 production image (`^22`), and the README prerequisites say Node 22 or 24. No code change was needed.
+- CI moves from Node 20 (EOL) to Node 22 and 24: the CI matrix is `[22.x, 24.x]` (22 is the production image and keeps the gated bridge, sdk-audit and pytest steps) and the audit workflow runs on 24.x. The production image stays on Node 22, the root `@types/node` follows it (`^22`), and the README prerequisites say Node 22 or 24. No code change was needed.
 
 ### Security
 
