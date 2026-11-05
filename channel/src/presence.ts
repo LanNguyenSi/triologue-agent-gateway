@@ -1,11 +1,11 @@
 /**
  * Presence: Claude Code hooks (SessionStart, UserPromptSubmit,
- * PermissionRequest, Stop, StopFailure, PostToolUseFailure, SessionEnd) post
- * their payload to a localhost listener this server opens; the listener maps
- * the event onto the session status the gateway understands. The port is
- * written to `${stateDir}/sessions/<claude-pid>.json`, where the hook script
- * finds it by its parent process id (the hook shell's parent is Claude Code,
- * and so is this server's).
+ * PermissionRequest, PreToolUse, Stop, StopFailure, PostToolUseFailure,
+ * SessionEnd) post their payload to a localhost listener this server opens;
+ * the listener maps the event onto the session status the gateway
+ * understands. The port is written to `${stateDir}/sessions/<claude-pid>.json`,
+ * where the hook script finds it by its parent process id (the hook shell's
+ * parent is Claude Code, and so is this server's).
  */
 
 import fs from 'node:fs';
@@ -14,6 +14,9 @@ import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 
 export type SessionStatus = 'online' | 'working' | 'waiting_approval' | 'error';
+
+/** A hook payload carries the whole tool input; a large Write still has to get through. */
+export const MAX_HOOK_BODY_BYTES = 1024 * 1024;
 
 export interface HookPayload {
   hook_event_name?: string;
@@ -49,7 +52,10 @@ export function statusForHook(payload: HookPayload): PresenceChange | null {
     case 'PostToolUseFailure':
       return { status: 'error', detail: tool, claudeSessionId };
     case 'SessionEnd':
-      return { status: 'offline', detail: null, claudeSessionId };
+      // `/clear` and `/resume` end the Claude session and start a new one while
+      // this server lives on, so the gateway session stays; it ends when Claude
+      // Code closes stdin (index.ts). Idle until the next prompt.
+      return { status: 'online', detail: null, claudeSessionId };
     default:
       return null;
   }
@@ -76,12 +82,21 @@ export async function startPresenceListener(opts: PresenceListenerOptions): Prom
       return;
     }
     let body = '';
+    let tooLarge = false;
     req.setEncoding('utf8');
     req.on('data', (chunk: string) => {
+      if (tooLarge) return;
       body += chunk;
-      if (body.length > 64 * 1024) req.destroy();
+      if (body.length > MAX_HOOK_BODY_BYTES) {
+        tooLarge = true;
+        body = '';
+      }
     });
     req.on('end', () => {
+      if (tooLarge) {
+        res.writeHead(413).end();
+        return;
+      }
       let payload: HookPayload;
       try {
         payload = JSON.parse(body) as HookPayload;

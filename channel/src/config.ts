@@ -2,8 +2,12 @@
  * Configuration of the channel server. Zero-dependency on purpose: the server
  * runs on the user's machine as a Claude Code subprocess.
  *
- * Sources, later wins: `${STATE_DIR}/.env` (written by `/triologue:configure`
- * or by hand; `KEY=value` lines, `#` comments), then the process environment.
+ * Sources, later wins: `${STATE_DIR}/.env` (`KEY=value` lines, `#` comments),
+ * then the process environment. In the environment every key is also read
+ * with a `TRIOLOGUE_` prefix (`TRIOLOGUE_BYOA_TOKEN`), and the keys whose
+ * plain names other programs use too (`HOST`, `PROJECT`, `ROOMS`, `RUNTIME`,
+ * `LOG_LEVEL`) are read from the environment only with the prefix, so a shell
+ * that exports `HOST=0.0.0.0` does not change what the session reports.
  * STATE_DIR is `CLAUDE_PLUGIN_DATA` when Claude Code runs the server as a
  * plugin, else `~/.claude/channels/triologue`, like the official channel
  * plugins.
@@ -35,13 +39,16 @@ export interface ChannelConfig {
   project: string | null;
   /** Claude Code's own session id when a hook reported it; filled at runtime. */
   claudeSessionId: string | null;
-  /** Where the channel keeps its state (.env, last-event-id, session discovery files). */
+  /** Where the channel keeps its state (.env, session discovery files). */
   stateDir: string;
   /** Port of the local hook listener; 0 picks a free one. */
   presencePort: number;
   heartbeatSeconds: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
 }
+
+/** Keys other programs set in a shell too; from the environment they count only as `TRIOLOGUE_<KEY>`. */
+export const PREFIX_ONLY_IN_ENV = new Set(['HOST', 'PROJECT', 'ROOMS', 'RUNTIME', 'LOG_LEVEL']);
 
 export function defaultStateDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.CLAUDE_PLUGIN_DATA && env.CLAUDE_PLUGIN_DATA.length > 0
@@ -90,18 +97,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ChannelConfig 
       return {};
     }
   })();
+  const nonEmpty = (v: string | undefined): string | undefined => (v !== undefined && v !== '' ? v : undefined);
   const get = (key: string): string | undefined => {
-    const v = env[key];
-    return v !== undefined && v !== '' ? v : fileValues[key];
+    const prefixed = key.startsWith('TRIOLOGUE_') ? key : `TRIOLOGUE_${key}`;
+    return nonEmpty(env[prefixed])
+      ?? (PREFIX_ONLY_IN_ENV.has(key) ? undefined : nonEmpty(env[key]))
+      ?? nonEmpty(fileValues[prefixed])
+      ?? nonEmpty(fileValues[key]);
   };
 
   const gatewayUrl = (get('GATEWAY_URL') ?? '').replace(/\/+$/, '');
   if (!gatewayUrl) throw new Error('GATEWAY_URL is required (e.g. https://opentriologue.ai/gateway); set it in the environment or in ' + path.join(stateDir, '.env'));
-  const byoaToken = get('BYOA_TOKEN') ?? get('TRIOLOGUE_BYOA_TOKEN') ?? '';
-  if (!byoaToken) throw new Error('BYOA_TOKEN is required; run /triologue:configure <token> or set it in ' + path.join(stateDir, '.env'));
+  const byoaToken = get('BYOA_TOKEN') ?? '';
+  if (!byoaToken) throw new Error('BYOA_TOKEN is required; put it in ' + path.join(stateDir, '.env') + ' (see /triologue:configure)');
 
   const triologueUrl = (get('TRIOLOGUE_URL') ?? gatewayUrl.replace(/\/gateway$/, '')).replace(/\/+$/, '');
-  const cwd = get('CLAUDE_PROJECT_DIR') ?? process.cwd();
+  const cwd = nonEmpty(env.CLAUDE_PROJECT_DIR) ?? process.cwd();
   const heartbeatSeconds = Number(get('HEARTBEAT_SECONDS') ?? '30');
   const presencePort = Number(get('PRESENCE_PORT') ?? '0');
 

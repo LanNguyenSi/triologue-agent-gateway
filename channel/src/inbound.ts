@@ -5,8 +5,9 @@
  * Order: the agent's own messages are dropped; messages by other agents are
  * dropped unless allowed; the sender must be on the allowlist (by Triologue
  * user id or username, never by room); with room bindings, only bound rooms
- * pass; a `yes <id>` / `no <id>` from an allowed sender becomes a permission
- * verdict and never reaches the model; everything else is delivered.
+ * pass; a `yes <id>` / `no <id>` from an allowed human becomes a permission
+ * verdict and never reaches the model (from an agent it is dropped);
+ * everything else is delivered.
  */
 
 export interface RoomMessage {
@@ -66,6 +67,8 @@ export function decideInbound(message: RoomMessage, config: GateConfig): GateDec
   }
   const verdict = PERMISSION_REPLY_RE.exec(message.content);
   if (verdict) {
+    // Only a person decides what the terminal may run, whatever ALLOW_AGENTS says.
+    if (message.senderType !== 'HUMAN') return { action: 'drop', reason: 'verdict-from-agent' };
     return {
       action: 'verdict',
       requestId: verdict[2].toLowerCase(),
@@ -75,16 +78,21 @@ export function decideInbound(message: RoomMessage, config: GateConfig): GateDec
   return { action: 'deliver', content: message.content, meta: buildMeta(message) };
 }
 
+/** Meta values land in the attributes of the <channel> tag; keep quotes, angle brackets and line breaks out. */
+export function metaValue(value: string | null | undefined): string {
+  return (value ?? '').replace(/[\r\n"<>]/g, ' ').trim();
+}
+
 /** The `<channel>` tag attributes; every value is a string, keys are identifiers. */
 export function buildMeta(message: RoomMessage): Record<string, string> {
   const meta: Record<string, string> = {
-    room: message.room,
-    room_name: message.roomName ?? '',
-    thread_id: message.threadId ?? '',
-    message_id: message.id,
-    event_id: message.eventId === undefined ? '' : String(message.eventId),
-    sender: message.sender,
-    sender_id: message.senderId ?? '',
+    room: metaValue(message.room),
+    room_name: metaValue(message.roomName),
+    thread_id: metaValue(message.threadId),
+    message_id: metaValue(message.id),
+    event_id: message.eventId === undefined ? '' : metaValue(String(message.eventId)),
+    sender: metaValue(message.sender),
+    sender_id: metaValue(message.senderId),
     sender_type: message.senderType,
   };
   for (const key of Object.keys(meta)) {

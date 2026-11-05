@@ -4,10 +4,16 @@
  * `fetch` only, no HTTP library.
  */
 
-import fs from 'node:fs';
-import path from 'node:path';
-
 export type Log = (level: 'debug' | 'info' | 'warn' | 'error', message: string) => void;
+
+/** A REST call that takes longer than this is abandoned. */
+export const REQUEST_TIMEOUT_MS = 10_000;
+/** Opening the stream (headers in) must not take longer than this. */
+export const STREAM_CONNECT_TIMEOUT_MS = 15_000;
+/** The gateway writes a heartbeat comment every 25 s; a stream silent for this long is dead. */
+export const STREAM_IDLE_TIMEOUT_MS = 90_000;
+/** A connection that held this long resets the reconnect backoff. */
+export const STABLE_CONNECTION_MS = 30_000;
 
 export interface SseMessage {
   id: string;
@@ -28,6 +34,8 @@ export interface GatewayClientOptions {
   token: string;
   log?: Log;
   fetchImpl?: typeof fetch;
+  /** Tests shorten it. */
+  requestTimeoutMs?: number;
 }
 
 export class GatewayError extends Error {
@@ -35,6 +43,18 @@ export class GatewayError extends Error {
     super(message);
     this.name = 'GatewayError';
   }
+}
+
+/** The gateway answered 404 for a session it no longer has (expired, ended, or removed). */
+export function isUnknownSession(err: unknown): boolean {
+  return err instanceof GatewayError && err.status === 404;
+}
+
+export interface SessionInfo {
+  sessionId: string;
+  status?: string;
+  rooms?: string[];
+  threads?: string[];
 }
 
 export class GatewayClient {
@@ -53,6 +73,7 @@ export class GatewayClient {
         ...extraHeaders,
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(this.opts.requestTimeoutMs ?? REQUEST_TIMEOUT_MS),
     });
     const text = await res.text();
     let parsed: unknown = null;
@@ -79,10 +100,15 @@ export class GatewayClient {
 
   // ── sessions ──
 
+  /**
+   * Register a session; with `sessionId` the gateway refreshes that session
+   * (same id, bindings added), or recreates it under the same id when it had
+   * expired. The response's `session` is the gateway's view of it.
+   */
   async connectSession(input: {
     sessionId?: string; runtime: string; host: string; cwd: string; project?: string | null;
     claudeSessionId?: string | null; rooms?: string[]; threads?: string[];
-  }): Promise<{ sessionId: string; heartbeatSeconds: number; ttlSeconds: number }> {
+  }): Promise<{ sessionId: string; heartbeatSeconds: number; ttlSeconds: number; session?: SessionInfo }> {
     return this.call('POST', `${this.opts.gatewayUrl}/byoa/sessions/connect`, input);
   }
 
@@ -158,8 +184,6 @@ export interface SseStreamOptions {
   gatewayUrl: string;
   token: string;
   sessionId: string | null;
-  /** File that remembers the last processed event id across restarts. */
-  lastEventFile: string | null;
   onMessage: (message: SseMessage) => void | Promise<void>;
   onConnect?: () => void;
   onDisconnect?: (reason: string) => void;
@@ -167,23 +191,25 @@ export interface SseStreamOptions {
   fetchImpl?: typeof fetch;
   /** Backoff cap in ms (tests shorten it). */
   maxBackoffMs?: number;
+  /** Silence on the stream (no bytes, heartbeats count) that counts as a dead connection (tests shorten it). */
+  idleTimeoutMs?: number;
 }
 
 export class SseStream {
   private abort: AbortController | null = null;
   private stopped = false;
   private attempts = 0;
+  /**
+   * The last processed event id, sent as Last-Event-ID on reconnect so the
+   * gateway replays the gap. Memory only, on purpose: a new process starts
+   * from now. An attended session should not be handed the backlog of a night,
+   * and the file would be shared by every Claude Code on the machine.
+   */
   private lastEventId: string | null = null;
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly opts: SseStreamOptions) {
     this.fetchImpl = opts.fetchImpl ?? fetch;
-    if (opts.lastEventFile) {
-      try {
-        const saved = fs.readFileSync(opts.lastEventFile, 'utf8').trim();
-        if (/^\d+$/.test(saved)) this.lastEventId = saved;
-      } catch { /* first start */ }
-    }
   }
 
   private log(level: 'debug' | 'info' | 'warn' | 'error', message: string): void {
@@ -193,9 +219,12 @@ export class SseStream {
   /** Runs until stop(); reconnects with exponential backoff. */
   async start(): Promise<void> {
     while (!this.stopped) {
+      let connectedAt = 0;
       try {
-        await this.connectOnce();
-        this.attempts = 0;
+        await this.connectOnce(() => { connectedAt = Date.now(); });
+        if (this.stopped) break;
+        this.log('warn', 'SSE stream closed by the gateway');
+        this.opts.onDisconnect?.('closed');
       } catch (err) {
         if (this.stopped) break;
         const message = err instanceof Error ? err.message : String(err);
@@ -203,6 +232,9 @@ export class SseStream {
         this.opts.onDisconnect?.(message);
       }
       if (this.stopped) break;
+      // A connection that held for a while starts the backoff over; one that
+      // dropped at once keeps it growing.
+      if (connectedAt > 0 && Date.now() - connectedAt >= STABLE_CONNECTION_MS) this.attempts = 0;
       const delay = Math.min(this.opts.maxBackoffMs ?? 60_000, 1000 * 2 ** Math.min(this.attempts++, 6));
       this.log('info', `SSE reconnect in ${Math.round(delay / 1000)}s`);
       await new Promise((r) => setTimeout(r, delay));
@@ -214,43 +246,49 @@ export class SseStream {
     this.abort?.abort();
   }
 
-  private remember(eventId: string | null): void {
-    if (!eventId) return;
-    this.lastEventId = eventId;
-    if (this.opts.lastEventFile) {
-      try {
-        fs.mkdirSync(path.dirname(this.opts.lastEventFile), { recursive: true });
-        fs.writeFileSync(this.opts.lastEventFile, eventId);
-      } catch (err) {
-        this.log('warn', `could not persist last event id: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-  }
-
-  private async connectOnce(): Promise<void> {
-    this.abort = new AbortController();
+  private async connectOnce(onOpen: () => void): Promise<void> {
+    const abort = new AbortController();
+    this.abort = abort;
     const url = `${this.opts.gatewayUrl}/byoa/sse/stream${this.opts.sessionId ? `?session=${encodeURIComponent(this.opts.sessionId)}` : ''}`;
-    const res = await this.fetchImpl(url, {
-      headers: {
-        Accept: 'text/event-stream',
-        Authorization: `Bearer ${this.opts.token}`,
-        'Cache-Control': 'no-cache',
-        ...(this.lastEventId ? { 'Last-Event-ID': this.lastEventId } : {}),
-      },
-      signal: this.abort.signal,
-    });
-    if (!res.ok) throw new Error(`SSE HTTP ${res.status}`);
+    const connectTimer = setTimeout(() => abort.abort(new Error(`SSE connect timeout after ${STREAM_CONNECT_TIMEOUT_MS / 1000}s`)), STREAM_CONNECT_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await this.fetchImpl(url, {
+        headers: {
+          Accept: 'text/event-stream',
+          Authorization: `Bearer ${this.opts.token}`,
+          'Cache-Control': 'no-cache',
+          ...(this.lastEventId ? { 'Last-Event-ID': this.lastEventId } : {}),
+        },
+        signal: abort.signal,
+      });
+    } finally {
+      clearTimeout(connectTimer);
+    }
+    if (!res.ok) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new Error(`SSE HTTP ${res.status}`);
+    }
     if (!res.body) throw new Error('SSE response has no body');
     this.log('info', `SSE connected${this.opts.sessionId ? ` as session ${this.opts.sessionId}` : ''}`);
+    onOpen();
     this.opts.onConnect?.();
 
+    const idleMs = this.opts.idleTimeoutMs ?? STREAM_IDLE_TIMEOUT_MS;
     const reader = res.body.getReader();
+    let idle = false;
+    // Cancelling the reader settles a pending read; aborting alone need not.
+    const onIdle = () => { idle = true; reader.cancel().catch(() => undefined); abort.abort(); };
+    let idleTimer = setTimeout(onIdle, idleMs);
     const decoder = new TextDecoder();
     let buffer = '';
     try {
       for (;;) {
         const { value, done } = await reader.read();
+        clearTimeout(idleTimer);
+        if (idle) throw new Error(`no data for ${idleMs} ms`);
         if (done) return;
+        idleTimer = setTimeout(onIdle, idleMs);
         buffer += decoder.decode(value, { stream: true });
         let sep: number;
         while ((sep = buffer.indexOf('\n\n')) >= 0) {
@@ -276,10 +314,14 @@ export class SseStream {
           } catch (err) {
             this.log('error', `onMessage failed: ${err instanceof Error ? err.message : String(err)}`);
           }
-          this.remember(parsed.id);
+          if (parsed.id) this.lastEventId = parsed.id;
         }
       }
+    } catch (err) {
+      if (idle) throw new Error(`no data for ${idleMs} ms`);
+      throw err;
     } finally {
+      clearTimeout(idleTimer);
       reader.releaseLock();
     }
   }

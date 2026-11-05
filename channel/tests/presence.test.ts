@@ -3,7 +3,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { discoveryFile, startPresenceListener, statusForHook } from '../src/presence.js';
+import { MAX_HOOK_BODY_BYTES, discoveryFile, startPresenceListener, statusForHook } from '../src/presence.js';
 
 describe('statusForHook', () => {
   it.each([
@@ -14,7 +14,8 @@ describe('statusForHook', () => {
     ['Stop', 'online', null],
     ['StopFailure', 'error', 'Bash'],
     ['PostToolUseFailure', 'error', 'Bash'],
-    ['SessionEnd', 'offline', null],
+    // /clear and /resume end the Claude session while the server lives on; the gateway session stays.
+    ['SessionEnd', 'online', null],
   ])('%s -> %s', (event, status, detail) => {
     expect(statusForHook({ hook_event_name: event, session_id: 'cs-1', tool_name: 'Bash' })).toEqual({ status, detail, claudeSessionId: 'cs-1' });
   });
@@ -40,7 +41,7 @@ describe('startPresenceListener', () => {
     });
   }
 
-  it('writes the discovery file, maps posted hooks and answers 400/404 for junk', async () => {
+  it('writes the discovery file, maps posted hooks and answers 400/404/413 for junk', async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triologue-presence-'));
     dirs.push(stateDir);
     const onChange = vi.fn();
@@ -53,7 +54,11 @@ describe('startPresenceListener', () => {
     expect(onChange).toHaveBeenCalledWith({ status: 'working', detail: null, claudeSessionId: 'cs-9' });
     expect(await post(listener.port, '{bad')).toBe(400);
     expect(await post(listener.port, JSON.stringify({ hook_event_name: 'PreCompact' }))).toBe(204);
-    expect(onChange).toHaveBeenCalledTimes(1);
+    // A payload beyond the cap is answered, not dropped on the floor.
+    expect(await post(listener.port, JSON.stringify({ hook_event_name: 'PreToolUse', tool_input: 'x'.repeat(MAX_HOOK_BODY_BYTES + 1) }))).toBe(413);
+    // A large Write payload within the cap still counts.
+    expect(await post(listener.port, JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: 'x'.repeat(200 * 1024) }))).toBe(204);
+    expect(onChange).toHaveBeenCalledTimes(2);
 
     await listener.close();
     expect(fs.existsSync(file)).toBe(false);
