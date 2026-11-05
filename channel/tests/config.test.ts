@@ -29,7 +29,7 @@ describe('loadConfig', () => {
     const stateDir = tmpState();
     fs.writeFileSync(path.join(stateDir, '.env'), 'GATEWAY_URL=https://opentriologue.ai/gateway/\nBYOA_TOKEN=byoa_file\nALLOWED_SENDERS=User-Lan, lan\n');
 
-    const c = loadConfig({ CLAUDE_PLUGIN_DATA: stateDir, BYOA_TOKEN: 'byoa_env', CLAUDE_PROJECT_DIR: '/projects/evidence-api', ROOMS: 'room-1,room-1,room-2' });
+    const c = loadConfig({ CLAUDE_PLUGIN_DATA: stateDir, BYOA_TOKEN: 'byoa_env', CLAUDE_PROJECT_DIR: '/projects/evidence-api', TRIOLOGUE_ROOMS: 'room-1,room-1,room-2' });
 
     expect(c.gatewayUrl).toBe('https://opentriologue.ai/gateway');
     expect(c.triologueUrl).toBe('https://opentriologue.ai');
@@ -47,13 +47,29 @@ describe('loadConfig', () => {
 
   it('accepts TRIOLOGUE_BYOA_TOKEN, an explicit TRIOLOGUE_URL and bool/number overrides', () => {
     const stateDir = tmpState();
-    const c = loadConfig({ CLAUDE_PLUGIN_DATA: stateDir, GATEWAY_URL: 'http://localhost:9500', TRIOLOGUE_BYOA_TOKEN: 'byoa_t', TRIOLOGUE_URL: 'http://localhost:4001/', ALLOW_AGENTS: 'yes', HEARTBEAT_SECONDS: '10', PRESENCE_PORT: '70000', LOG_LEVEL: 'debug' });
+    const c = loadConfig({ CLAUDE_PLUGIN_DATA: stateDir, GATEWAY_URL: 'http://localhost:9500', TRIOLOGUE_BYOA_TOKEN: 'byoa_t', TRIOLOGUE_URL: 'http://localhost:4001/', ALLOW_AGENTS: 'yes', HEARTBEAT_SECONDS: '10', PRESENCE_PORT: '70000', TRIOLOGUE_LOG_LEVEL: 'debug' });
     expect(c.triologueUrl).toBe('http://localhost:4001');
     expect(c.byoaToken).toBe('byoa_t');
     expect(c.allowAgents).toBe(true);
     expect(c.heartbeatSeconds).toBe(10);
     expect(c.presencePort).toBe(0);
     expect(c.logLevel).toBe('debug');
+  });
+
+  it('reads HOST, PROJECT, ROOMS, RUNTIME and LOG_LEVEL from the environment only with the TRIOLOGUE_ prefix, from the file plainly', () => {
+    const stateDir = tmpState();
+    fs.writeFileSync(path.join(stateDir, '.env'), 'GATEWAY_URL=https://x/gateway\nBYOA_TOKEN=byoa_file\nHOST=mac-mini\nROOMS=room-9\nLOG_LEVEL=warn\n');
+    const shell = { CLAUDE_PLUGIN_DATA: stateDir, HOST: '0.0.0.0', PROJECT: 'something-else', ROOMS: 'room-1', LOG_LEVEL: 'debug', CLAUDE_PROJECT_DIR: '/projects/evidence-api' };
+    const c = loadConfig(shell);
+    expect(c.host).toBe('mac-mini');
+    expect(c.project).toBe('evidence-api');
+    expect(c.rooms).toEqual(['room-9']);
+    expect(c.logLevel).toBe('warn');
+    const prefixed = loadConfig({ ...shell, TRIOLOGUE_HOST: 'laptop', TRIOLOGUE_PROJECT: 'evidence', TRIOLOGUE_ROOMS: 'room-2', TRIOLOGUE_RUNTIME: 'claude-dev' });
+    expect(prefixed.host).toBe('laptop');
+    expect(prefixed.project).toBe('evidence');
+    expect(prefixed.rooms).toEqual(['room-2']);
+    expect(prefixed.runtime).toBe('claude-dev');
   });
 
   it('defaults the state dir to ~/.claude/channels/triologue outside a plugin', () => {

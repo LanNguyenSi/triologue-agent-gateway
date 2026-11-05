@@ -15,9 +15,12 @@ file=""
 for pid in "$PPID" "$(ps -o ppid= -p "$PPID" 2>/dev/null | tr -d ' ')"; do
   if [ -n "$pid" ] && [ -f "$dir/$pid.json" ]; then file="$dir/$pid.json"; break; fi
 done
-# Fallback (for example when the server runs under tsx): the newest file.
+# Fallback (for example when the server runs under tsx): the one and only
+# discovery file. With several sessions on the machine the pid must match, or
+# this session would post its status as another one's.
 if [ -z "$file" ]; then
-  file="$(ls -t "$dir"/*.json 2>/dev/null | head -n 1)"
+  set -- "$dir"/*.json
+  if [ "$#" -eq 1 ] && [ -f "$1" ]; then file="$1"; fi
 fi
 [ -n "$file" ] || exit 0
 
