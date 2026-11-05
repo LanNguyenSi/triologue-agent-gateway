@@ -52,7 +52,7 @@ flowchart TD
 
 ## Agent sessions
 
-`src/sessions.ts` keeps a registry of running agent runtimes (host, working directory, status, bound rooms and threads) in Redis behind `/byoa/sessions`: a hash per session with a 90-second TTL that heartbeats and status changes refresh, plus sets for the agent's sessions, the session's bindings and the reverse lookups per room and thread. Expired sessions are pruned by every listing read and by a sweep every 30 seconds started in `start()`. The registry emits presence events; the routing loops below do not consult sessions yet. Details and invariants: [docs/okf/agent-sessions.md](okf/agent-sessions.md).
+`src/sessions.ts` keeps a registry of running agent runtimes (host, working directory, status, bound rooms and threads) in Redis behind `/byoa/sessions`: a hash per session with a 90-second TTL that heartbeats and status changes refresh, plus sets for the agent's sessions, the session's bindings and the reverse lookups per room and thread. Expired sessions are pruned by every listing read and by a sweep every 30 seconds started in `start()`. The SSE loop below asks the registry which sessions are bound to a message's thread, else its room, and delivers to those sessions' streams (a stream is tied to a session with `?session=`), falling back to every stream of the agent; `src/presence-push.ts` turns the registry's state into Triologue's agent presence (`POST /api/agents/me/presence` with the agent's token, debounced, refreshed with every sweep). Details and invariants: [docs/okf/agent-sessions.md](okf/agent-sessions.md).
 
 ## Receiving and delivery
 

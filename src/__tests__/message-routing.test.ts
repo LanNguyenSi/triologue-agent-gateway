@@ -23,6 +23,8 @@ process.env.GATEWAY_TOKEN = 'test-gateway-token';
 const mocks = vi.hoisted(() => ({
   onMessage: vi.fn(),
   sendAsAgent: vi.fn(),
+  sessionsForRoom: vi.fn().mockResolvedValue([] as string[]),
+  sessionsForThread: vi.fn().mockResolvedValue([] as string[]),
   dispatchWebhook: vi.fn(),
   webhookAgents: [] as unknown[],
   allAgents: [] as unknown[],
@@ -60,6 +62,7 @@ vi.mock('../triologue-bridge', () => {
 vi.mock('../auth', () => ({
   loadAgents: vi.fn(),
   buildTokenIndex: vi.fn(),
+  getCurrentTokenForAgent: vi.fn().mockReturnValue(null),
   authenticateToken: (t: string) => mocks.authenticate(t),
   getWebhookAgents: () => mocks.webhookAgents,
   getAgentByUsername: vi.fn().mockReturnValue(null),
@@ -71,6 +74,31 @@ vi.mock('../auth', () => ({
 vi.mock('../webhook-dispatch', () => ({ dispatchWebhook: mocks.dispatchWebhook }));
 
 vi.mock('ioredis', () => ({ Redis: class { on = vi.fn(); disconnect = vi.fn(); } }));
+
+// The registry's binding lookups decide which sessions a message targets.
+vi.mock('../sessions', () => ({
+  SessionRegistry: class {
+    on = vi.fn();
+    off = vi.fn();
+    sessionsForRoom = mocks.sessionsForRoom;
+    sessionsForThread = mocks.sessionsForThread;
+    sweep = vi.fn().mockResolvedValue(0);
+    agents = vi.fn().mockResolvedValue([]);
+    list = vi.fn().mockResolvedValue([]);
+  },
+  createSessionsRouter: () => vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
+  SWEEP_INTERVAL_MS: 30_000,
+  SESSION_ID_RE: /^[A-Za-z0-9_-]{1,64}$/,
+}));
+
+vi.mock('../presence-push', () => ({
+  PresencePusher: class {
+    schedule = vi.fn();
+    push = vi.fn().mockResolvedValue(undefined);
+    refreshAll = vi.fn().mockResolvedValue(undefined);
+    stop = vi.fn();
+  },
+}));
 
 vi.mock('../byoa-sse', () => ({
   sseRouter: vi.fn((_req: unknown, _res: unknown, next: () => void) => next()),
@@ -153,6 +181,8 @@ function message(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   mocks.dispatchWebhook.mockClear();
   mocks.fanout.mockClear();
+  mocks.sessionsForRoom.mockReset().mockResolvedValue([]);
+  mocks.sessionsForThread.mockReset().mockResolvedValue([]);
   mocks.hasSSE.mockReset().mockReturnValue(false);
   mocks.webhookAgents = [];
   mocks.allAgents = [];
@@ -254,6 +284,55 @@ function framesOf(ws: { send: ReturnType<typeof vi.fn> }, type: string): Record<
     .filter((f) => f.type === type);
 }
 
+describe('session-aware SSE delivery', () => {
+  function sseAgent(key: string) {
+    const agent = webhookAgent({ mentionKey: key, username: `${key}user`, receiveMode: 'mentions' });
+    mocks.allAgents = [agent];
+    mocks.hasSSE.mockReturnValue(true);
+    return agent;
+  }
+
+  it('targets the sessions bound to the thread before the ones bound to the room', async () => {
+    const agent = sseAgent('thrbind');
+    mocks.sessionsForThread.mockResolvedValue(['s-thread']);
+    mocks.sessionsForRoom.mockResolvedValue(['s-room']);
+
+    await handler(message({ senderType: 'human', senderUsername: 'human1', content: '@thrbind hi', threadId: 'thread-1' }));
+
+    expect(mocks.sessionsForThread).toHaveBeenCalledWith(agent.userId, 'thread-1');
+    expect(mocks.sessionsForRoom).not.toHaveBeenCalled();
+    expect(mocks.fanout).toHaveBeenCalledWith(agent.userId, expect.anything(), ['s-thread']);
+  });
+
+  it('falls through to the room binding when the thread has none, and skips the thread lookup without a thread', async () => {
+    const agent = sseAgent('roombind');
+    mocks.sessionsForRoom.mockResolvedValue(['s-room']);
+
+    await handler(message({ senderType: 'human', senderUsername: 'human1', content: '@roombind a', threadId: 'thread-1' }));
+    expect(mocks.fanout).toHaveBeenLastCalledWith(agent.userId, expect.anything(), ['s-room']);
+
+    await handler(message({ senderType: 'human', senderUsername: 'human1', content: '@roombind b', threadId: null }));
+    expect(mocks.sessionsForThread).toHaveBeenCalledTimes(1);
+    expect(mocks.sessionsForRoom).toHaveBeenLastCalledWith(agent.userId, 'room-1');
+    expect(mocks.fanout).toHaveBeenLastCalledWith(agent.userId, expect.anything(), ['s-room']);
+  });
+
+  it('passes no targets when nothing is bound or the registry fails', async () => {
+    const agent = sseAgent('nobind');
+
+    await handler(message({ senderType: 'human', senderUsername: 'human1', content: '@nobind a', threadId: null }));
+    expect(mocks.fanout).toHaveBeenLastCalledWith(agent.userId, expect.anything(), undefined);
+
+    mocks.sessionsForRoom.mockRejectedValue(new Error('redis down'));
+    const silence = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await handler(message({ senderType: 'human', senderUsername: 'human1', content: '@nobind b', threadId: null }));
+    silence.mockRestore();
+    // MUTATION GUARD: letting the lookup error escape would drop the message
+    // instead of delivering it to every stream; fails.
+    expect(mocks.fanout).toHaveBeenLastCalledWith(agent.userId, expect.anything(), undefined);
+  });
+});
+
 describe('WebSocket message frame: optional threadId on send', () => {
   beforeEach(() => {
     mocks.sendAsAgent.mockReset().mockResolvedValue(undefined);
@@ -333,7 +412,7 @@ describe('thread and sender identity are passed through to the agent payloads', 
       senderId: 'user-h1',
       sender: 'human1',
       senderType: 'HUMAN',
-    }));
+    }), undefined);
   });
 
   it('SSE fanout carries threadId null for a top-level room message', async () => {

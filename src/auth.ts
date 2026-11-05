@@ -125,6 +125,8 @@ export function stopSync(): void {
 // ── Token lookup ──
 
 const tokenMap = new Map<string, AgentInfo>();
+/** Agent user id -> current token, for calls the gateway makes on an agent's behalf. */
+const agentTokenMap = new Map<string, string>();
 
 /**
  * Tokens replaced by a rotation, honoured as a bearer only inside the grace
@@ -154,8 +156,10 @@ function toAgentInfo(a: AgentConfig): AgentInfo {
 export function buildTokenIndex(): void {
   tokenMap.clear();
   previousTokenMap.clear();
+  agentTokenMap.clear();
   for (const a of agents) {
     tokenMap.set(a.token, toAgentInfo(a));
+    agentTokenMap.set(a.userId, a.token);
   }
   for (const a of agents) {
     const prev = a.previousToken;
@@ -166,6 +170,11 @@ export function buildTokenIndex(): void {
     if (Number.isNaN(expiresAtMs) || tokenMap.has(prev)) continue;
     previousTokenMap.set(prev, { agent: toAgentInfo(a), expiresAtMs });
   }
+}
+
+/** The agent's current token, null for an unknown agent. Never a grace-window token. */
+export function getCurrentTokenForAgent(agentUserId: string): string | null {
+  return agentTokenMap.get(agentUserId) ?? null;
 }
 
 /** Current token only. The rotate route uses this; a grace-window token fails. */

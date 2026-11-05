@@ -22,6 +22,7 @@ import type { TriologueBridge } from './triologue-bridge.js';
 // Use existing auth system
 import { authenticateToken, authenticateCurrentToken, rotateTokenUpstream } from './auth.js';
 import { consumeWindow } from './rate-window.js';
+import { SESSION_ID_RE } from './sessions.js';
 import { parseThreadId } from './thread-id.js';
 
 // ── Bridge reference (injected from index.ts) ──
@@ -41,10 +42,15 @@ const redisSub = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
 interface SSEClient {
   agentId: string;
   agentName: string;
+  /** The agent session this stream belongs to (`?session=`), null for an untagged stream. */
+  sessionId: string | null;
   res: Response;
   connectedAt: Date;
   lastEventId: number;
 }
+
+/** Streams one agent may hold per session, and untagged. */
+const MAX_STREAMS_PER_SESSION = 2;
 
 interface AgentMessage {
   id: string;
@@ -109,6 +115,18 @@ async function authenticateSSE(req: Request, res: Response, next: NextFunction) 
 sseRouter.get('/stream', authenticateSSE, (req: Request, res: Response) => {
   const agent: AgentInfo = (req as any).agent;
 
+  // A stream may belong to one registered agent session (see sessions.ts):
+  // routing then prefers it for the rooms and threads that session is bound
+  // to. The id is only a label here; its existence is the registry's business.
+  const rawSession = req.query.session ?? req.headers['x-session-id'];
+  let sessionId: string | null = null;
+  if (rawSession !== undefined) {
+    if (typeof rawSession !== 'string' || !SESSION_ID_RE.test(rawSession)) {
+      return res.status(400).json({ error: 'session must match [A-Za-z0-9_-]{1,64}' });
+    }
+    sessionId = rawSession;
+  }
+
   // SSE Headers
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -127,6 +145,7 @@ sseRouter.get('/stream', authenticateSSE, (req: Request, res: Response) => {
   const client: SSEClient = {
     agentId: agent.userId,
     agentName: agent.name,
+    sessionId,
     res,
     connectedAt: new Date(),
     lastEventId,
@@ -138,12 +157,15 @@ sseRouter.get('/stream', authenticateSSE, (req: Request, res: Response) => {
 
   const clients = sseClients.get(agent.userId)!;
 
-  // Connection limit: max 2 concurrent SSE streams per agent
-  if (clients.length >= 2) {
+  // Connection limit: max 2 concurrent streams per agent session, and max 2
+  // untagged streams per agent (the limit before sessions existed).
+  if (clients.filter((c) => c.sessionId === sessionId).length >= MAX_STREAMS_PER_SESSION) {
     res.write(
       formatSSE(0, 'error', {
         code: 'TOO_MANY_CONNECTIONS',
-        message: 'Max 2 concurrent streams per agent',
+        message: sessionId
+          ? `Max ${MAX_STREAMS_PER_SESSION} concurrent streams per session`
+          : `Max ${MAX_STREAMS_PER_SESSION} concurrent streams per agent`,
       })
     );
     return res.end();
@@ -155,7 +177,7 @@ sseRouter.get('/stream', authenticateSSE, (req: Request, res: Response) => {
   metrics.recordConnection(agent.userId, `${agent.name} (SSE)`);
 
   console.log(
-    `✅ [SSE] ${agent.emoji} ${agent.name} connected (${clients.length} streams, lastEventId: ${lastEventId})`
+    `✅ [SSE] ${agent.emoji} ${agent.name} connected (${clients.length} streams${sessionId ? `, session ${sessionId}` : ''}, lastEventId: ${lastEventId})`
   );
 
   // Send initial connection event
@@ -169,7 +191,7 @@ sseRouter.get('/stream', authenticateSSE, (req: Request, res: Response) => {
 
   // Deliver missed messages if lastEventId > 0 (resume after reconnect)
   if (lastEventId > 0) {
-    replayMissedMessages(agent.userId, lastEventId, res).catch((err) =>
+    replayMissedMessages(agent.userId, lastEventId, sessionId, res).catch((err) =>
       console.error(`[SSE] Replay failed for ${agent.name}: ${err.message}`)
     );
   }
@@ -356,24 +378,39 @@ function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
 
 // ── Resume: Replay missed messages from Redis ──
 
-async function replayMissedMessages(agentId: string, afterEventId: number, res: Response): Promise<void> {
+/**
+ * Which stored events a reconnecting stream gets back. An event fanned out
+ * to specific sessions (`targets`) is replayed only to a stream of one of
+ * them; an event that went to every stream (no `targets`) is replayed to
+ * every stream, tagged or not. Exported for the unit test.
+ */
+export function selectReplayEvents(
+  entries: string[],
+  sessionId: string | null,
+): Array<{ eventId: number; event: Record<string, unknown> }> {
+  const selected: Array<{ eventId: number; event: Record<string, unknown> }> = [];
+  for (const entry of entries) {
+    try {
+      const parsed = JSON.parse(entry) as Record<string, unknown>;
+      if (typeof parsed.eventId !== 'number') continue;
+      const targets = Array.isArray(parsed.targets) ? (parsed.targets as string[]) : null;
+      if (targets && (sessionId === null || !targets.includes(sessionId))) continue;
+      const { targets: _dropped, ...event } = parsed;
+      selected.push({ eventId: parsed.eventId, event });
+    } catch { /* skip malformed */ }
+  }
+  return selected.sort((a, b) => a.eventId - b.eventId);
+}
+
+async function replayMissedMessages(agentId: string, afterEventId: number, sessionId: string | null, res: Response): Promise<void> {
   // Scope replay to this agent's own stream only. The per-recipient key is
   // written by fanoutToSSEClient, which runs once per authorized recipient
   // after the full receiveMode/@mention/shouldDeliver filter (see index.ts).
   // Never scan other agents' keys: that would leak cross-room/cross-tenant.
-  const missed: Array<{ eventId: number; data: string }> = [];
 
   // Get messages with score > afterEventId (score = eventId)
   const entries = await redis.zrangebyscore(`sse:replay:${agentId}`, afterEventId + 1, '+inf');
-  for (const entry of entries) {
-    try {
-      const parsed = JSON.parse(entry);
-      missed.push({ eventId: parsed.eventId, data: entry });
-    } catch { /* skip malformed */ }
-  }
-
-  // Sort by eventId and deliver
-  missed.sort((a, b) => a.eventId - b.eventId);
+  const missed = selectReplayEvents(entries, sessionId);
 
   if (missed.length > 0) {
     console.log(`[SSE] Replaying ${missed.length} missed messages for agent ${agentId} (after eventId ${afterEventId})`);
@@ -381,8 +418,7 @@ async function replayMissedMessages(agentId: string, afterEventId: number, res: 
 
   for (const m of missed) {
     try {
-      const parsed = JSON.parse(m.data);
-      const sseData = formatSSE(m.eventId, 'message', parsed);
+      const sseData = formatSSE(m.eventId, 'message', m.event);
       if (res.writable && !res.writableEnded) {
         res.write(sseData);
       }
@@ -401,9 +437,42 @@ export function hasSSEClient(agentId: string): boolean {
   return !!clients && clients.length > 0;
 }
 
-export async function fanoutToSSEClient(agentId: string, message: AgentMessage): Promise<void> {
+/** The session ids of the agent's open streams (untagged streams excluded). */
+export function getSSESessionIds(agentId: string): string[] {
+  const ids = new Set<string>();
+  for (const client of sseClients.get(agentId) ?? []) {
+    if (client.sessionId) ids.add(client.sessionId);
+  }
+  return [...ids];
+}
+
+/**
+ * Deliver a message to the agent's streams. With `targetSessionIds`, only
+ * streams of those sessions receive it, provided at least one of them is
+ * open; otherwise (no targets, or none of the targeted sessions has a
+ * stream) every stream of the agent receives it, as before sessions
+ * existed, so a binding to a session that lost its stream never swallows
+ * a message. Returns the session ids the message was written for, or null
+ * when it went to every stream.
+ */
+export async function fanoutToSSEClient(
+  agentId: string,
+  message: AgentMessage,
+  targetSessionIds?: string[],
+): Promise<string[] | null> {
   const clients = sseClients.get(agentId);
-  if (!clients || clients.length === 0) return;
+  if (!clients || clients.length === 0) return null;
+
+  let recipients = clients;
+  let targets: string[] | null = null;
+  if (targetSessionIds && targetSessionIds.length > 0) {
+    const wanted = new Set(targetSessionIds);
+    const matching = clients.filter((c) => c.sessionId !== null && wanted.has(c.sessionId));
+    if (matching.length > 0) {
+      recipients = matching;
+      targets = [...new Set(matching.map((c) => c.sessionId!))];
+    }
+  }
 
   const eventId = await redis.incr('sse:eventId');
 
@@ -413,12 +482,13 @@ export async function fanoutToSSEClient(agentId: string, message: AgentMessage):
   // function is only invoked for agents that already passed the live-delivery
   // filter, so a per-agent key contains exactly the messages this agent was
   // authorized to receive. Replay reads this key only, preventing cross-room/tenant leakage.
+  // A targeted delivery records its sessions, so replay keeps it to them.
   const replayKey = `sse:replay:${agentId}`;
-  await redis.zadd(replayKey, eventId, JSON.stringify({ ...message, eventId }));
+  await redis.zadd(replayKey, eventId, JSON.stringify({ ...message, eventId, ...(targets ? { targets } : {}) }));
   await redis.expire(replayKey, 86400);
 
   const sseData = formatSSE(eventId, 'message', message);
-  for (const client of clients) {
+  for (const client of recipients) {
     try {
       if (client.res.writable && !client.res.writableEnded) {
         client.res.write(sseData);
@@ -428,6 +498,7 @@ export async function fanoutToSSEClient(agentId: string, message: AgentMessage):
       console.error(`[SSE] Failed to send to ${client.agentName}:`, err);
     }
   }
+  return targets;
 }
 
 // ── Shutdown ──

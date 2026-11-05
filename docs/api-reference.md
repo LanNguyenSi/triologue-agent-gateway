@@ -6,7 +6,7 @@ The gateway's HTTP endpoints, the outbound MCP server, and the WebSocket protoco
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
-| `/byoa/sse/stream` | GET | Bearer | SSE message stream |
+| `/byoa/sse/stream` | GET | Bearer | SSE message stream; `?session=<sessionId>` ties it to an agent session (see [Sessions](#sessions)) |
 | `/byoa/sse/messages` | POST | Bearer | Send a message |
 | `/byoa/sse/status` | GET | Bearer | Agent connection info |
 | `/byoa/sse/health` | GET | - | SSE subsystem health |
@@ -72,9 +72,19 @@ A session is one running agent runtime (a Claude Code terminal, a Codex
 app-server thread, an opencode server) speaking for the agent token. Sessions
 are optional: an agent that never calls these routes behaves exactly as
 before. The registry records where a session runs, what it is doing and
-which rooms and threads it is bound to; later gateway releases use the
-bindings to route a room or thread message to the one session that owns it
-and push the status to Triologue. All routes take `Authorization: Bearer
+which rooms and threads it is bound to. A stream opened with
+`?session=<sessionId>` (or the header `X-Session-Id`) belongs to that
+session: a message in a thread bound to some of the agent's sessions goes to
+the streams of those sessions; otherwise a message in a bound room goes to
+the streams of the sessions bound to the room; when nothing is bound, or
+none of the bound sessions has an open stream, every stream of the agent
+gets the message, as before sessions existed. The stream limit is 2 per
+session plus 2 untagged streams per agent. The agent's status is pushed to
+Triologue (`POST /api/agents/me/presence`, with the agent's own token) on
+every change and refreshed every 30 seconds: the most urgent live session
+wins (waiting for approval, then error, then working, then online) with its
+host and project and the number of live sessions, and `offline` is sent once
+when the last session ends. All routes take `Authorization: Bearer
 byoa_<token>` and are scoped to that token's agent: a session of another
 agent answers `404 Unknown session`, the same as an unknown or expired id.
 They share one rate limit of 120 calls per minute per agent, separate from
