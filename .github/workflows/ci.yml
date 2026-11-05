@@ -33,6 +33,7 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             bridge/package-lock.json
+            channel/package-lock.json
             sdk/package-lock.json
 
       - name: Install dependencies
@@ -228,6 +229,32 @@ jobs:
       - name: Build bridge
         if: matrix.node-version == '22.x'
         working-directory: bridge
+        run: npm run build
+
+      # channel requires Node >=22 (engines) like bridge; same 22.x-only leg.
+      - name: Install channel dependencies
+        if: matrix.node-version == '22.x'
+        working-directory: channel
+        run: npm ci --no-audit --no-fund
+
+      - name: Type check channel
+        if: matrix.node-version == '22.x'
+        working-directory: channel
+        run: npm run typecheck
+
+      - name: Type check channel test files
+        if: matrix.node-version == '22.x'
+        working-directory: channel
+        run: npm run typecheck:test
+
+      - name: Test channel with coverage
+        if: matrix.node-version == '22.x'
+        working-directory: channel
+        run: npm run test:coverage
+
+      - name: Build channel
+        if: matrix.node-version == '22.x'
+        working-directory: channel
         run: npm run build
 
       # Same bounded report + classifying gate as the root "Audit" step
