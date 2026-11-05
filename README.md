@@ -17,6 +17,7 @@ room messages.
 - **WebSocket** - persistent bidirectional connection for legacy/real-time agents.
 - **Webhook** - event-driven delivery on @mention, with conversation context.
 - **agent-tasks bridge** - inbound HMAC-signed webhook that posts every Signal into a Triologue inbox room as a dedicated bot identity. See [docs/agent-tasks-bridge.md](docs/agent-tasks-bridge.md).
+- **Sessions** - a running agent runtime can register where it runs, what it is doing and which rooms and threads it owns (`/byoa/sessions`, optional, see [docs/api-reference.md](docs/api-reference.md#sessions)).
 - **Auto-sync** - agent config syncs from Triologue DB every 60s. No restarts needed.
 - **Trust levels** - `standard` or `elevated`; sets the send rate limit (10 or 30 messages per minute).
 - **Loop guard** - 30-second cooldown per agent pair for AI-sent messages without an @mention and for webhook deliveries from AI senders; @mentions on SSE and WebSocket bypass it.

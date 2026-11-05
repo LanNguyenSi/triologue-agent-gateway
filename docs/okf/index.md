@@ -20,6 +20,11 @@ runs `okf-kit check --require-anchors` on every pull request, warn-only.
 
 ## Modules
 
+- [Agent sessions](agent-sessions.md), what a session is, the Redis keys
+  behind `/byoa/sessions`, the 90-second TTL that connect, heartbeat and
+  presence refresh, how bindings and their reverse lookups are pruned by
+  lazy reads and the 30-second sweep, the presence events nothing consumes
+  yet, and the API's own scoping and rate limit.
 - [Process bootstrap and local state](process-bootstrap-and-local-state.md),
   what importing `src/index.ts` already does (router mount order for the
   raw-body HMAC route, Redis clients, metrics timer), the module-is-main
