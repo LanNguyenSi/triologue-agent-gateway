@@ -79,7 +79,9 @@ the streams of those sessions; otherwise a message in a bound room goes to
 the streams of the sessions bound to the room; when nothing is bound, or
 none of the bound sessions has an open stream, every stream of the agent
 gets the message, as before sessions existed. The stream limit is 2 per
-session plus 2 untagged streams per agent. The agent's status is pushed to
+session plus 2 untagged streams per agent, and 10 per agent in all (the
+session tag is a label, not checked against the registry, so it cannot open
+unbounded streams). The agent's status is pushed to
 Triologue (`POST /api/agents/me/presence`, with the agent's own token) on
 every change and refreshed every 30 seconds: the most urgent live session
 wins (waiting for approval, then error, then working, then online) with its

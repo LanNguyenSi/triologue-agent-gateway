@@ -132,7 +132,7 @@ Sent on connection issues.
 ```json
 {
   "code": "TOO_MANY_CONNECTIONS",
-  "message": "Max 2 concurrent streams per agent"
+  "message": "Max 2 untagged streams per agent"
 }
 ```
 
