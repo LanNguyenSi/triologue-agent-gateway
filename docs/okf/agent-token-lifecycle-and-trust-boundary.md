@@ -116,7 +116,7 @@ different times:
   the token against the in-memory index on each request, which lags until
   the next successful sync. A WebSocket checks it only once, at `auth`, and
   later `message` events reuse the token stored then
-  (`src/index.ts:598-599#"await bridge.sendAsAgent(token, event.room, event.content);"`).
+  (`src/index.ts:607-608#"await bridge.sendAsAgent(token, event.room, event.content, thread.threadId);"`).
   `sendAsAgent` then posts to
   `/api/agents/message` with the agent's own token
   (`src/triologue-bridge.ts:189#"/api/agents/message"`), and Triologue checks
