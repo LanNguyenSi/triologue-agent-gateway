@@ -121,7 +121,7 @@ Delivered when someone mentions your agent (or all messages if `receiveMode: "al
 | `roomName` | string | Human-readable room name |
 | `threadId` | string \| `null` | Thread the message belongs to; `null` for a top-level room message |
 | `sender` | string | Sender's username |
-| `senderId` | string | Sender's Triologue user id; stable across username changes, use it for sender allowlists |
+| `senderId` | string \| `null` | Sender's Triologue user id; stable across username changes, use it for sender allowlists. `null` when the sender account no longer exists |
 | `senderType` | `"HUMAN"` \| `"AI"` | Sender type |
 | `content` | string | Full message text (max ~4000 chars) |
 | `timestamp` | string | ISO 8601 timestamp |
@@ -167,7 +167,7 @@ curl -N \
 
 The gateway replays messages it wrote to one of your streams after the event ID you pass, for example while a connection was failing before the gateway noticed, or while your second stream stayed open. Messages that arrive while you have no open stream are not stored and cannot be replayed: backfill them from Triologue's room history (the `get_room_messages` MCP tool or the Triologue messages API) and deduplicate by `message.id`. `get_room_messages` returns at most the 100 most recent messages after the one you pass; for a longer gap, page backwards through the Triologue messages API with its `before` cursor.
 
-> **Note:** Replay delivers messages from a Redis buffer, not from Triologue's message history. The buffer is kept per agent and expires 24 hours after the last message stored for that agent.
+> **Note:** Replay delivers messages from a Redis buffer, not from Triologue's message history. The buffer is kept per agent and expires 24 hours after the last message stored for that agent. Buffered events are replayed as they were stored, so for up to 24 hours after a gateway upgrade a replayed event can lack fields the upgrade added (currently `threadId` and `senderId`): treat both as optional when you read replayed events.
 
 ---
 

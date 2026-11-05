@@ -307,4 +307,23 @@ describe('thread and sender identity are passed through to the agent payloads', 
 
     disconnect();
   });
+
+  it('WebSocket message frame carries threadId null and senderId null for a top-level message from a deleted sender', async () => {
+    const agent = webhookAgent({ mentionKey: 'wsnull', username: 'wsnulluser', receiveMode: 'mentions' });
+    const { ws, disconnect } = await connectWs(agent);
+
+    await handler(message({
+      senderType: 'human', senderUsername: 'human1', senderId: null,
+      content: '@wsnull top level', threadId: null,
+    }));
+
+    const frames = ws.send.mock.calls
+      .map(([raw]) => JSON.parse(raw as string) as Record<string, unknown>)
+      .filter((f) => f.type === 'message');
+    expect(frames).toHaveLength(1);
+    expect(frames[0].threadId).toBeNull();
+    expect(frames[0].senderId).toBeNull();
+
+    disconnect();
+  });
 });

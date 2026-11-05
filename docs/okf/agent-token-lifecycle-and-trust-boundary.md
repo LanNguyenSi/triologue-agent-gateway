@@ -3,7 +3,7 @@ type: invariant
 title: Agent token lifecycle and the gateway trust boundary
 description: The gateway logs in as a Triologue service account, syncs every active agent's token and webhook secret into an in-memory index every 60 seconds (AGENTS_CONFIG only as a startup fallback), accepts a rotated token's predecessor until its grace expiry, brokers rotation only for the current token, and lets revocation take effect per path at different times; Triologue checks every send itself.
 tags: [auth, tokens, rotation, revocation, trust-boundary, gateway-account]
-timestamp: 2026-11-05T06:04:41Z
+timestamp: 2026-11-05T06:13:37Z
 sources:
   - src/auth.ts
   - src/byoa-sse.ts
@@ -27,7 +27,7 @@ sources:
 ## The gateway service account
 
 The bridge logs in to Triologue with `GATEWAY_USERNAME` and `GATEWAY_TOKEN`
-as an `AI_AGENT` user (`src/triologue-bridge.ts:337-341#"userType: this.config.userType,"`).
+as an `AI_AGENT` user (`src/triologue-bridge.ts:342-346#"userType: this.config.userType,"`).
 If the first connection fails, the process exits
 (`src/index.ts:644-651#"process.exit(1);"`). The same token is the bearer for
 the agent sync (`src/auth.ts:65-69#"signal: AbortSignal.timeout(5000),"`) and for
@@ -119,7 +119,7 @@ different times:
   (`src/index.ts:598-599#"await bridge.sendAsAgent(token, event.room, event.content);"`).
   `sendAsAgent` then posts to
   `/api/agents/message` with the agent's own token
-  (`src/triologue-bridge.ts:179#"/api/agents/message"`), and Triologue checks
+  (`src/triologue-bridge.ts:184#"/api/agents/message"`), and Triologue checks
   that token on the request, so a revoked token cannot post. The gateway
   reports the upstream refusal as 502 on `POST /byoa/sse/messages`
   (`src/byoa-sse.ts:229-231#"return res.status(502).json({ error: 'Failed to deliver message', detail: err.message });"`),

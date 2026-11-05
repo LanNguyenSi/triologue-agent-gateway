@@ -11,6 +11,10 @@ export interface IncomingMessage {
   roomName?: string;
   /** Sender's Triologue username (e.g. `alice`, `claude-bot`). */
   sender: string;
+  /** Sender's Triologue user id, null for a deleted sender; absent on older gateways. */
+  senderId?: string | null;
+  /** Thread id, null for a top-level room message; absent on older gateways. */
+  threadId?: string | null;
   /** HUMAN or AI (from the gateway SSE payload). */
   senderType: 'HUMAN' | 'AI';
   content: string;

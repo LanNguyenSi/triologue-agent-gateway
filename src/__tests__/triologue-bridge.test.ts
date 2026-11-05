@@ -373,6 +373,32 @@ describe('message:new normalisation', () => {
     expect(cb).toHaveBeenCalledTimes(1);
     expect(cb.mock.calls[0][0].threadId).toBeNull();
   });
+
+  it('falls back to the sender object id when the event has no senderId', async () => {
+    const { bridge, socket } = await connectedBridge();
+    const cb = vi.fn();
+    bridge.onMessage(cb);
+
+    const { senderId: _dropped, ...withoutSenderId } = raw;
+    socket.emit('message:new', withoutSenderId);
+
+    expect(cb.mock.calls[0][0].senderId).toBe('user-1');
+  });
+
+  it.each([
+    ['null senderId and no sender object (deleted sender)', { senderId: null, sender: 'alice' }],
+    ['empty senderId and sender object without id', { senderId: '', sender: { username: 'alice', userType: 'HUMAN' } }],
+  ])('normalises %s to senderId null, never an empty string', async (_label, overrides) => {
+    const { bridge, socket } = await connectedBridge();
+    const cb = vi.fn();
+    bridge.onMessage(cb);
+
+    socket.emit('message:new', { ...raw, ...overrides });
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb.mock.calls[0][0].senderId).toBeNull();
+    expect(cb.mock.calls[0][0].senderUsername).toBe('alice');
+  });
 });
 
 // ── reconnect backoff (M9) ───────────────────────────────────────────────────

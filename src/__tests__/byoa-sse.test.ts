@@ -306,6 +306,9 @@ describe('fanoutToSSEClient', () => {
     expect(allData).toContain('msg-001');
     expect(allData).toContain('Hello SSEBot!');
     expect(allData).toContain('humanuser');
+    // The two routing fields reach the wire as written, not only the mock.
+    expect(allData).toContain('"threadId":null');
+    expect(allData).toContain('"senderId":"user-human"');
 
     destroy();
     await waitFor(() => !hasSSEClient(fakeAgent.userId));

@@ -3,7 +3,7 @@ type: invariant
 title: Message delivery routing across WebSocket, SSE, webhook and openclaw-inject
 description: One inbound Triologue message runs through three loops in src/index.ts (WebSocket clients, SSE agents, webhook and openclaw-inject agents) with different filters; the loop guard ignores trust level, an @mention bypasses it on WebSocket and SSE only, WebSocket wins over SSE and webhook, SSE and webhook can both fire, and the SSE replay buffer only holds messages fanned out while a stream was open.
 tags: [routing, delivery, loop-guard, sse, websocket, webhook, replay]
-timestamp: 2026-11-05T06:04:41Z
+timestamp: 2026-11-05T06:13:37Z
 sources:
   - src/index.ts
   - src/loop-guard.ts
@@ -34,10 +34,11 @@ mode, @mentions and the loop guard, as described below.
 
 `TriologueBridge` turns each `message:new` event into the callback shape the
 loops read. `senderType` is `'ai'` when the sender's user type starts with
-`AI`, otherwise `'human'`; `senderId` and `timestamp` fall back to the
-sender object and to the receive time; `threadId` is the event's `threadId`
-when that is a non-empty string and `null` otherwise
-(`src/triologue-bridge.ts:127-143#"timestamp: raw.createdAt ?? new Date().toISOString(),"`).
+`AI`, otherwise `'human'`; `senderId` is the event's `senderId`, else the
+sender object's id, and `null` when neither is a non-empty string (a deleted
+sender); `timestamp` falls back to the receive time; `threadId` is the
+event's `threadId` when that is a non-empty string and `null` otherwise
+(`src/triologue-bridge.ts:132-148#"timestamp: raw.createdAt ?? new Date().toISOString(),"`).
 
 ## The three loops
 
@@ -189,14 +190,14 @@ and webhook paths update it; a plain WebSocket frame or an SSE event does
 not. `context` therefore lists messages after the last webhook or inject
 delivery to that agent in that room: at most 50, the most recent ones, in the
 order Triologue returns them, which is oldest first
-(`src/triologue-bridge.ts:307#"return data.messages || [];"`, which passes
+(`src/triologue-bridge.ts:312#"return data.messages || [];"`, which passes
 the page through unchanged;
 the messages route in the Triologue repository
 ([`server/src/routes/messages.ts`](https://github.com/LanNguyenSi/triologue/blob/91e0de030e957e5dc70d89d79c36316e64c86e7d/server/src/routes/messages.ts#L89-L97),
 lines 89 to 97) fetches newest first, takes `limit`, and reverses
 it to chronological order), without the current message, and empty on the
 first delivery in a room or when the history fetch fails
-(`src/triologue-bridge.ts:308-310#"return [];"`). Where the tracker file lives
+(`src/triologue-bridge.ts:313-315#"return [];"`). Where the tracker file lives
 is in [process-bootstrap-and-local-state.md](process-bootstrap-and-local-state.md).
 
 ## SSE replay buffer scope

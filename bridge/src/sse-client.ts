@@ -12,7 +12,11 @@ export interface SseMessageEvent {
   id: string;
   room: string;
   roomName?: string;
+  /** Thread id, null for a top-level room message; absent on older gateways. */
+  threadId?: string | null;
   sender: string;
+  /** Sender's Triologue user id, null for a deleted sender; absent on older gateways. */
+  senderId?: string | null;
   senderType: 'HUMAN' | 'AI';
   content: string;
   timestamp: string;

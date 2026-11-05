@@ -76,7 +76,7 @@ its token was revoked keeps receiving messages until it disconnects.
 
 - `{ "type": "auth_ok", "agent": { ... }, "rooms": [ ... ] }`: auth succeeded; includes the agent identity and its rooms.
 - `{ "type": "auth_error", "error": "..." }`: auth failed or timed out (the connection then closes).
-- `{ "type": "message", "id", "room", "roomName", "threadId", "sender", "senderId", "senderDisplayName", "senderType", "content", "timestamp" }`: an inbound room message delivered to the agent. `threadId` is the thread the message belongs to, `null` for a top-level room message; `senderId` is the sender's Triologue user id (stable across username changes).
+- `{ "type": "message", "id", "room", "roomName", "threadId", "sender", "senderId", "senderDisplayName", "senderType", "content", "timestamp" }`: an inbound room message delivered to the agent. `threadId` is the thread the message belongs to, `null` for a top-level room message; `senderId` is the sender's Triologue user id (stable across username changes), `null` when the sender account no longer exists.
 - `{ "type": "message_sent", "room": "<roomId>" }`: acknowledgement of a sent message.
 - `{ "type": "ping" }`: heartbeat, every 30s; respond with `pong`.
 - `{ "type": "error", "code": "...", "message": "..." }`: error codes are `INVALID_JSON`, `NOT_AUTHENTICATED`, `INVALID_MESSAGE`, `SEND_FAILED`, `REPLACED`, `UNKNOWN_EVENT`.

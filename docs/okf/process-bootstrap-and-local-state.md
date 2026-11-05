@@ -3,7 +3,7 @@ type: module
 title: Process bootstrap and local state
 description: What importing src/index.ts already does (router mount order for the raw-body HMAC route, Redis clients, metrics timer), the module-is-main guard and its extensionless-invocation trap, the startup order from the GATEWAY_TOKEN check to listen, and where the gateway keeps local state, including under the Docker runtime user.
 tags: [bootstrap, startup, entrypoint, local-state, redis, docker]
-timestamp: 2026-11-05T06:04:41Z
+timestamp: 2026-11-05T06:13:37Z
 sources:
   - src/index.ts
   - src/agent-tasks-bridge.ts
@@ -83,11 +83,11 @@ uses the explicit extension (`Dockerfile:23#"dist/index.js"`).
    (`src/index.ts:702#"await start();"`).
 3. `start()` connects the bridge: it authenticates, with a fresh login
    unless the cached session token is still valid
-   (`src/triologue-bridge.ts:316-337#"// Fresh login"`), then
+   (`src/triologue-bridge.ts:321-342#"// Fresh login"`), then
    opens the Socket.io connection
-   (`src/triologue-bridge.ts:70-72#"await this.createSocket();"`), which
+   (`src/triologue-bridge.ts:71-73#"await this.createSocket();"`), which
    rejects after 10 seconds without a connection
-   (`src/triologue-bridge.ts:155-158#"reject(new Error('Connection timeout (10s)'));"`).
+   (`src/triologue-bridge.ts:160-163#"reject(new Error('Connection timeout (10s)'));"`).
    A failure here exits the process with code 1; on success the bridge is
    handed to the SSE and MCP modules
    (`src/index.ts:644-651#"process.exit(1);"`).
@@ -104,11 +104,11 @@ uses the explicit extension (`Dockerfile:23#"dist/index.js"`).
 
 After the first connection the bridge reconnects on its own, with a delay
 that starts at 2 seconds and doubles up to 30 seconds
-(`src/triologue-bridge.ts:52-53#"private baseReconnectDelay = 2_000;"`,
-`src/triologue-bridge.ts:256-272#"setTimeout(() => this.doReconnect(), delay);"`).
+(`src/triologue-bridge.ts:53-54#"private baseReconnectDelay = 2_000;"`,
+`src/triologue-bridge.ts:261-277#"setTimeout(() => this.doReconnect(), delay);"`).
 It drops the cached session token first, except after a disconnect that
 Triologue did not initiate
-(`src/triologue-bridge.ts:105-108#"this.scheduleReconnect(reason === 'io server disconnect');"`).
+(`src/triologue-bridge.ts:106-109#"this.scheduleReconnect(reason === 'io server disconnect');"`).
 
 ## Key files and local state
 
@@ -126,7 +126,7 @@ The directory is not created by the gateway; it must exist and be writable.
 - `metrics.jsonl`: one metrics snapshot appended per flush
   (`src/metrics.ts:42#"this.logPath = stateFile('metrics.jsonl');"`).
 - `.jwt-cache-gateway.json`: the gateway's cached Triologue session token
-  and its expiry (`src/triologue-bridge.ts:59#"this.cachePath = stateFile('.jwt-cache-gateway.json');"`).
+  and its expiry (`src/triologue-bridge.ts:60#"this.cachePath = stateFile('.jwt-cache-gateway.json');"`).
 
 `AGENTS_CONFIG` is different: its default `./agents.json` is resolved
 against the working directory (`src/auth.ts:36#"const AGENTS_FILE = process.env.AGENTS_CONFIG ?? './agents.json';"`).
@@ -149,7 +149,7 @@ again. Each writer catches the error: the read tracker and the metrics flush log
 (`src/read-tracker.ts:40-44#"Failed to save read tracker"`,
 `src/metrics.ts:124-128#"Failed to flush metrics"`), and the session-token
 cache write is dropped silently
-(`src/triologue-bridge.ts:347-353#"} catch {}"`). The state then lives in
+(`src/triologue-bridge.ts:352-358#"} catch {}"`). The state then lives in
 memory only and is gone after a restart. Without a volume the files live in
 the container and are lost when it is removed. The image contains only
 `package.json`, the lockfile, `dist/` and the production dependencies

@@ -30,7 +30,8 @@ type MessageCallback = (msg: {
   content: string;
   senderUsername: string;
   senderType: 'human' | 'ai';
-  senderId: string;
+  /** Sender's Triologue user id, null when the event carries none (deleted sender). */
+  senderId: string | null;
   roomId: string;
   roomName?: string;
   /** Thread the message belongs to, null for a top-level room message. */
@@ -128,13 +129,17 @@ export class TriologueBridge {
         const senderUsername = raw.senderUsername ?? senderObj?.username ?? raw.sender ?? 'unknown';
         const senderUType = raw.senderUserType ?? senderObj?.userType ?? '';
         const isAgent = senderUType.startsWith('AI') || senderUType === 'AI_AGENT';
+        // Message.senderId is nullable in Triologue (the sender may be deleted);
+        // anything that is not a non-empty string becomes null, never ''.
+        const rawSenderId = raw.senderId ?? senderObj?.id;
+        const senderId = typeof rawSenderId === 'string' && rawSenderId.length > 0 ? rawSenderId : null;
 
         this.onMessageCb({
           id: raw.id,
           content: raw.content,
           senderUsername,
           senderType: isAgent ? 'ai' : 'human',
-          senderId: raw.senderId ?? senderObj?.id ?? '',
+          senderId,
           roomId: raw.roomId,
           roomName: raw.roomName,
           // Prisma emits threadId as null for a top-level message; anything

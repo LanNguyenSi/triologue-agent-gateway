@@ -50,7 +50,7 @@ interface AgentMessage {
   roomName: string;
   threadId: string | null;
   sender: string;
-  senderId: string;
+  senderId: string | null;
   senderType: 'HUMAN' | 'AI';
   content: string;
   timestamp: string;
