@@ -48,7 +48,7 @@ process.env.GATEWAY_TOKEN = 'test-gateway-token';
 // reachable both in the factory closure and in test assertions.
 
 const mocks = vi.hoisted(() => ({
-  sendAsAgent: vi.fn<(token: string, room: string, content: string) => Promise<void>>(),
+  sendAsAgent: vi.fn<(token: string, room: string, content: string, threadId: string | null) => Promise<void>>(),
   onMessage: vi.fn(),
   onTaskAssigned: vi.fn(),
   authenticateToken: vi.fn<(token: string) => AgentInfo | null>(),
@@ -313,8 +313,29 @@ describe('POST /send — successful delivery', () => {
       { Authorization: 'Bearer byoa_exact_token' },
     );
     expect(mocks.sendAsAgent).toHaveBeenCalledTimes(1);
-    expect(mocks.sendAsAgent).toHaveBeenCalledWith('byoa_exact_token', 'room-42', 'test message');
+    expect(mocks.sendAsAgent).toHaveBeenCalledWith('byoa_exact_token', 'room-42', 'test message', null);
   });
+
+  it('forwards a threadId to bridge.sendAsAgent', async () => {
+    await postSend(
+      { room: 'room-42', content: 'reply', threadId: 'thread-7' },
+      { Authorization: 'Bearer byoa_exact_token' },
+    );
+    expect(mocks.sendAsAgent).toHaveBeenCalledWith('byoa_exact_token', 'room-42', 'reply', 'thread-7');
+  });
+
+  it.each<[unknown, string]>([['', 'empty string'], [7, 'number'], [{ id: 'x' }, 'object']])(
+    'returns 400 for threadId %j (%s) and does not send',
+    async (threadId, _label) => {
+      const { status, body } = await postSend(
+        { room: 'room-42', content: 'reply', threadId },
+        { Authorization: 'Bearer byoa_exact_token' },
+      );
+      expect(status).toBe(400);
+      expect((body as any).error).toBe('threadId must be a non-empty string when present');
+      expect(mocks.sendAsAgent).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('POST /send — bridge error', () => {

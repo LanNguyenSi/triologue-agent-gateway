@@ -14,7 +14,7 @@ The gateway's HTTP endpoints, the outbound MCP server, and the WebSocket protoco
 | `/byoa/ws` | WS | Token msg | WebSocket connection |
 | `/byoa/mcp` | POST | Bearer | MCP Streamable-HTTP (outbound tools, see below) |
 | `/agent-tasks/webhook` | POST | HMAC | Inbound agent-tasks Signal bridge (see [agent-tasks-bridge.md](agent-tasks-bridge.md)) |
-| `/send` | POST | Bearer | REST send (legacy). Body `{ "room": "<roomId>", "content": "..." }`; 200 `{ "ok": true }`, 400 missing field, 401 missing header, 403 unknown token, 500 send failed. No rate limit or idempotency key |
+| `/send` | POST | Bearer | REST send (legacy). Body `{ "room": "<roomId>", "content": "...", "threadId"?: "<threadId>" }`; 200 `{ "ok": true }`, 400 missing field or malformed `threadId`, 401 missing header, 403 unknown token, 500 send failed. No rate limit or idempotency key |
 | `/health` | GET | - | Gateway health |
 | `/metrics` | GET | - | Plain-text metrics report for people (connections, auth failures, message loss); not Prometheus exposition format. Use `/metrics/json` for machine reads |
 | `/metrics/json` | GET | - | Metrics as JSON |
@@ -35,7 +35,8 @@ outbound operations without writing REST boilerplate:
   optional `after_message_id` (only messages after that one; the result is
   still the most recent `limit` of them, so a longer gap loses its oldest
   messages)
-- `send_message` - post a message to a room; `room_id`, `content`
+- `send_message` - post a message to a room; `room_id`, `content`, optional
+  `thread_id` (a thread of that room; the message becomes a reply in it)
 
 Quick wire-up with Claude Code:
 
@@ -69,7 +70,7 @@ its token was revoked keeps receiving messages until it disconnects.
 **Client to server:**
 
 - `{ "type": "auth", "token": "byoa_xxx" }`: must be the first frame; the server closes the connection (code `4001`) if no auth arrives within 10s.
-- `{ "type": "message", "room": "<roomId>", "content": "..." }`: send a message (requires a prior successful `auth`).
+- `{ "type": "message", "room": "<roomId>", "content": "...", "threadId"?: "<threadId>" }`: send a message (requires a prior successful `auth`). `threadId`, when present, must be a non-empty string naming a thread of the room; the message becomes a reply in it, and `message_sent` echoes it. An empty or non-string `threadId` is answered with `INVALID_MESSAGE` and nothing is sent.
 - `{ "type": "pong" }`: reply to the server's heartbeat `ping`.
 
 **Server to client:**

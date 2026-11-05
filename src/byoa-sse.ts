@@ -21,6 +21,7 @@ import type { TriologueBridge } from './triologue-bridge.js';
 
 // Use existing auth system
 import { authenticateToken, authenticateCurrentToken, rotateTokenUpstream } from './auth.js';
+import { parseThreadId } from './thread-id.js';
 
 // ── Bridge reference (injected from index.ts) ──
 let bridge: TriologueBridge | null = null;
@@ -200,7 +201,7 @@ sseRouter.get('/stream', authenticateSSE, (req: Request, res: Response) => {
 sseRouter.post('/messages', authenticateSSE, rateLimitMiddleware, async (req: Request, res: Response) => {
   const agent: AgentInfo = (req as any).agent;
   const token: string = (req as any).token;
-  const { roomId, content, idempotencyKey } = req.body;
+  const { roomId, content, idempotencyKey, threadId } = req.body;
 
   // Validate
   if (!roomId || !content) {
@@ -209,6 +210,11 @@ sseRouter.post('/messages', authenticateSSE, rateLimitMiddleware, async (req: Re
 
   if (typeof content !== 'string' || content.length > 4000) {
     return res.status(400).json({ error: 'content must be string, max 4000 chars' });
+  }
+
+  const thread = parseThreadId(threadId);
+  if (!thread.ok) {
+    return res.status(400).json({ error: thread.error });
   }
 
   // Idempotency check
@@ -225,7 +231,7 @@ sseRouter.post('/messages', authenticateSSE, rateLimitMiddleware, async (req: Re
   }
 
   try {
-    await bridge.sendAsAgent(token, roomId, content);
+    await bridge.sendAsAgent(token, roomId, content, thread.threadId);
   } catch (err: any) {
     console.error(`[SSE] Send failed for ${agent.name}: ${err.message}`);
     return res.status(502).json({ error: 'Failed to deliver message', detail: err.message });

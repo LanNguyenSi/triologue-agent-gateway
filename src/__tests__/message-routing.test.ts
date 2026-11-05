@@ -22,6 +22,7 @@ process.env.GATEWAY_TOKEN = 'test-gateway-token';
 
 const mocks = vi.hoisted(() => ({
   onMessage: vi.fn(),
+  sendAsAgent: vi.fn(),
   dispatchWebhook: vi.fn(),
   webhookAgents: [] as unknown[],
   allAgents: [] as unknown[],
@@ -45,7 +46,7 @@ vi.mock('ws', () => {
 
 vi.mock('../triologue-bridge', () => {
   class MockBridge {
-    sendAsAgent = vi.fn();
+    sendAsAgent = mocks.sendAsAgent;
     onMessage = mocks.onMessage;
     onTaskAssigned = vi.fn();
     connect = vi.fn();
@@ -223,7 +224,12 @@ describe('webhook loop-guard window starts only on a delivery', () => {
  * Register a WS client through the real auth handler. Returns the fake
  * socket (so a test can inspect the frames written to it) and a closer.
  */
-async function connectWs(agent: AgentInfo): Promise<{ ws: { send: ReturnType<typeof vi.fn> }; disconnect: () => void }> {
+async function connectWs(agent: AgentInfo): Promise<{
+  ws: { send: ReturnType<typeof vi.fn> };
+  /** Feed a client frame into the connection, as the ws library would. */
+  receive: (frame: Record<string, unknown>) => Promise<unknown>;
+  disconnect: () => void;
+}> {
   mocks.authenticate.mockReturnValue(agent);
   const handlers: Record<string, (...a: unknown[]) => unknown> = {};
   const ws = {
@@ -235,8 +241,60 @@ async function connectWs(agent: AgentInfo): Promise<{ ws: { send: ReturnType<typ
   mocks.wsConnection!(ws);
   await handlers.message(Buffer.from(JSON.stringify({ type: 'auth', token: 'tok' })));
   expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('auth_ok'));
-  return { ws, disconnect: () => { handlers.close(1000, 'test'); } };
+  return {
+    ws,
+    receive: (frame) => Promise.resolve(handlers.message(Buffer.from(JSON.stringify(frame)))),
+    disconnect: () => { handlers.close(1000, 'test'); },
+  };
 }
+
+function framesOf(ws: { send: ReturnType<typeof vi.fn> }, type: string): Record<string, unknown>[] {
+  return ws.send.mock.calls
+    .map(([raw]) => JSON.parse(raw as string) as Record<string, unknown>)
+    .filter((f) => f.type === type);
+}
+
+describe('WebSocket message frame: optional threadId on send', () => {
+  beforeEach(() => {
+    mocks.sendAsAgent.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('forwards threadId to bridge.sendAsAgent and echoes it in message_sent', async () => {
+    const agent = webhookAgent({ mentionKey: 'wssend', username: 'wssenduser' });
+    const { ws, receive, disconnect } = await connectWs(agent);
+
+    await receive({ type: 'message', room: 'room-1', content: 'reply', threadId: 'thread-3' });
+
+    expect(mocks.sendAsAgent).toHaveBeenCalledWith('tok', 'room-1', 'reply', 'thread-3');
+    expect(framesOf(ws, 'message_sent')).toEqual([{ type: 'message_sent', room: 'room-1', threadId: 'thread-3' }]);
+    disconnect();
+  });
+
+  it('sends with threadId null and no threadId in message_sent when the frame has none', async () => {
+    const agent = webhookAgent({ mentionKey: 'wsplain', username: 'wsplainuser' });
+    const { ws, receive, disconnect } = await connectWs(agent);
+
+    await receive({ type: 'message', room: 'room-1', content: 'top level' });
+
+    expect(mocks.sendAsAgent).toHaveBeenCalledWith('tok', 'room-1', 'top level', null);
+    expect(framesOf(ws, 'message_sent')).toEqual([{ type: 'message_sent', room: 'room-1' }]);
+    disconnect();
+  });
+
+  it('answers INVALID_MESSAGE for an empty threadId and does not send', async () => {
+    const agent = webhookAgent({ mentionKey: 'wsbad', username: 'wsbaduser' });
+    const { ws, receive, disconnect } = await connectWs(agent);
+
+    await receive({ type: 'message', room: 'room-1', content: 'reply', threadId: '' });
+
+    expect(mocks.sendAsAgent).not.toHaveBeenCalled();
+    expect(framesOf(ws, 'error')).toEqual([
+      { type: 'error', code: 'INVALID_MESSAGE', message: 'threadId must be a non-empty string when present' },
+    ]);
+    expect(framesOf(ws, 'message_sent')).toEqual([]);
+    disconnect();
+  });
+});
 
 describe('webhook window is not started for an agent already served over WebSocket', () => {
   it('an AI @mention while connected is not dispatched by the webhook loop and does not start the window', async () => {

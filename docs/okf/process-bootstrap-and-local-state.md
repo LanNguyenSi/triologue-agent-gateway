@@ -3,7 +3,7 @@ type: module
 title: Process bootstrap and local state
 description: What importing src/index.ts already does (router mount order for the raw-body HMAC route, Redis clients, metrics timer), the module-is-main guard and its extensionless-invocation trap, the startup order from the GATEWAY_TOKEN check to listen, and where the gateway keeps local state, including under the Docker runtime user.
 tags: [bootstrap, startup, entrypoint, local-state, redis, docker]
-timestamp: 2026-11-05T06:13:37Z
+timestamp: 2026-11-05T06:25:14Z
 sources:
   - src/index.ts
   - src/agent-tasks-bridge.ts
@@ -30,7 +30,7 @@ sources:
 ## Entry points
 
 - `main()`, `src/index.ts`, guarded by `isMainModule`
-  (`src/index.ts:726-729#"main();"`).
+  (`src/index.ts:739-742#"main();"`).
 - `start()`, `src/index.ts`, called by `main()` after local state is loaded.
 - Container: `node dist/index.js` (`Dockerfile:23#"dist/index.js"`).
 
@@ -40,7 +40,7 @@ Importing the module, as the tests do to reach the exported `app`, runs these
 steps without the guard:
 
 - Mounts the agent-tasks bridge router before the global JSON parser
-  (`src/index.ts:52-57#"app.use("`, `src/index.ts:73-75#"app.use(express.json());"`).
+  (`src/index.ts:53-58#"app.use("`, `src/index.ts:74-76#"app.use(express.json());"`).
   The bridge route parses its own body with `express.raw`, so the HMAC check
   sees the exact bytes received
   (`src/agent-tasks-bridge.ts:230-234#"express.raw({ type: 'application/json', limit: '256kb' }),"`).
@@ -48,13 +48,13 @@ steps without the guard:
   the router logs a warning when the bridge is disabled or runs in unsigned
   mode (`src/agent-tasks-bridge.ts:220-227#"ALLOW_UNSIGNED=true , accepting"`).
 - Mounts `/byoa/sse` and `/byoa/mcp` behind the JSON parser
-  (`src/index.ts:78-82#"app.use('/byoa/mcp', mcpRouter);"`).
+  (`src/index.ts:79-83#"app.use('/byoa/mcp', mcpRouter);"`).
 - Constructs the `TriologueBridge` without connecting it
-  (`src/index.ts:101-105#"userType: 'AI_AGENT',"`) and attaches the
+  (`src/index.ts:102-106#"userType: 'AI_AGENT',"`) and attaches the
   WebSocket server at `/byoa/ws` to the HTTP server
-  (`src/index.ts:517#"const wss = new WebSocketServer({ server, path: '/byoa/ws' });"`).
+  (`src/index.ts:520#"const wss = new WebSocketServer({ server, path: '/byoa/ws' });"`).
 - Through its imports: opens two Redis clients for `REDIS_URL`, defaulting
-  to `redis://localhost:6379` (`src/byoa-sse.ts:34-35#"const redisSub = new Redis("`);
+  to `redis://localhost:6379` (`src/byoa-sse.ts:35-36#"const redisSub = new Redis("`);
   starts the metrics flush timer, which appends a snapshot every 60 seconds
   (`src/metrics.ts:41-61#"this.flushInterval = setInterval(() => this.flush(), 60_000);"`);
   and reads the OpenClaw config and device files once
@@ -64,12 +64,12 @@ steps without the guard:
 ## The module-is-main guard and its trap
 
 `isMainModule` compares `process.argv[1]` with the module's own file path
-(`src/index.ts:726-729#"main();"`). That path always carries its extension,
+(`src/index.ts:739-742#"main();"`). That path always carries its extension,
 while `argv[1]` is the absolute path of what was typed, without extension
 resolution, so `node dist/index` (without `.js`) never matches: `main()`
 does not run, and the Redis clients opened at import keep the event loop
 alive, so the process stays up without listening
-(`src/index.ts:714-723#"Always invoke with the explicit"`). The Docker `CMD`
+(`src/index.ts:727-736#"Always invoke with the explicit"`). The Docker `CMD`
 uses the explicit extension (`Dockerfile:23#"dist/index.js"`).
 
 ## Startup order
@@ -77,35 +77,35 @@ uses the explicit extension (`Dockerfile:23#"dist/index.js"`).
 `main()` runs these steps in order:
 
 1. Exits with code 1 when `GATEWAY_TOKEN` is unset
-   (`src/index.ts:693-695#"process.exit(1);"`).
+   (`src/index.ts:706-708#"process.exit(1);"`).
 2. Loads `AGENTS_CONFIG`, builds the token index and loads the read tracker
-   (`src/index.ts:698-700#"loadReadTracker();"`), then calls `start()`
-   (`src/index.ts:702#"await start();"`).
+   (`src/index.ts:711-713#"loadReadTracker();"`), then calls `start()`
+   (`src/index.ts:715#"await start();"`).
 3. `start()` connects the bridge: it authenticates, with a fresh login
    unless the cached session token is still valid
-   (`src/triologue-bridge.ts:321-342#"// Fresh login"`), then
+   (`src/triologue-bridge.ts:327-348#"// Fresh login"`), then
    opens the Socket.io connection
    (`src/triologue-bridge.ts:71-73#"await this.createSocket();"`), which
    rejects after 10 seconds without a connection
    (`src/triologue-bridge.ts:160-163#"reject(new Error('Connection timeout (10s)'));"`).
    A failure here exits the process with code 1; on success the bridge is
    handed to the SSE and MCP modules
-   (`src/index.ts:644-651#"process.exit(1);"`).
+   (`src/index.ts:657-664#"process.exit(1);"`).
 4. Awaits the first agent sync, which also starts the 60-second sync timer
-   (`src/index.ts:655#"await startSync();"`). A failed first sync does not
+   (`src/index.ts:668#"await startSync();"`). A failed first sync does not
    stop startup.
-5. Starts listening on `PORT` (`src/index.ts:657#"server.listen(PORT, () => {"`)
+5. Starts listening on `PORT` (`src/index.ts:670#"server.listen(PORT, () => {"`)
    and updates the agent counts in the metrics every 30 seconds
-   (`src/index.ts:665-669#"}, 30_000);"`).
+   (`src/index.ts:678-682#"}, 30_000);"`).
 6. Registers `SIGTERM` and `SIGINT` handlers that stop the sync, disconnect
    the bridge, flush the metrics, end the SSE streams, close WebSocket
    clients and exit with code 0
-   (`src/index.ts:672-683#"process.on('SIGINT', shutdown);"`).
+   (`src/index.ts:685-696#"process.on('SIGINT', shutdown);"`).
 
 After the first connection the bridge reconnects on its own, with a delay
 that starts at 2 seconds and doubles up to 30 seconds
 (`src/triologue-bridge.ts:53-54#"private baseReconnectDelay = 2_000;"`,
-`src/triologue-bridge.ts:261-277#"setTimeout(() => this.doReconnect(), delay);"`).
+`src/triologue-bridge.ts:267-283#"setTimeout(() => this.doReconnect(), delay);"`).
 It drops the cached session token first, except after a disconnect that
 Triologue did not initiate
 (`src/triologue-bridge.ts:106-109#"this.scheduleReconnect(reason === 'io server disconnect');"`).
@@ -134,7 +134,7 @@ against the working directory (`src/auth.ts:36#"const AGENTS_FILE = process.env.
 Redis holds the SSE state that outlives a request: the global event counter
 `sse:eventId`, one replay set `sse:replay:<agentId>` per agent, and
 `idempotency:<agentId>:<key>` entries for `POST /byoa/sse/messages`, kept for
-one hour (`src/byoa-sse.ts:238-243#"3600"`).
+one hour (`src/byoa-sse.ts:244-249#"3600"`).
 
 ## Local state under the Docker runtime user
 
@@ -149,7 +149,7 @@ again. Each writer catches the error: the read tracker and the metrics flush log
 (`src/read-tracker.ts:40-44#"Failed to save read tracker"`,
 `src/metrics.ts:124-128#"Failed to flush metrics"`), and the session-token
 cache write is dropped silently
-(`src/triologue-bridge.ts:352-358#"} catch {}"`). The state then lives in
+(`src/triologue-bridge.ts:358-364#"} catch {}"`). The state then lives in
 memory only and is gone after a restart. Without a volume the files live in
 the container and are lost when it is removed. The image contains only
 `package.json`, the lockfile, `dist/` and the production dependencies
