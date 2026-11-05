@@ -97,6 +97,17 @@ describe('MessagesResource', () => {
     expect(http.post).toHaveBeenCalledWith('/api/agents/message', { roomId: 'r1', content: 'top' });
   });
 
+  it('send() forwards an empty threadId as given so the server can refuse it', async () => {
+    const http = makeHttp();
+    http.post.mockResolvedValue({ success: true, messageId: 'm4' });
+    const messages = new MessagesResource(http);
+
+    await messages.send('r1', 'oops', { threadId: '' });
+
+    // MUTATION GUARD: a truthiness check would silently drop the key
+    expect(http.post).toHaveBeenCalledWith('/api/agents/message', { roomId: 'r1', content: 'oops', threadId: '' });
+  });
+
   it('search(roomId, query) → GET with URL-encoded query', async () => {
     const http = makeHttp();
     http.get.mockResolvedValue({ messages: [] });

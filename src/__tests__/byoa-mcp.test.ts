@@ -315,9 +315,18 @@ describe('byoa-mcp input schema pins (zod 3 -> 4 migration)', () => {
     expect(bridgeMock.sendAsAgent).not.toHaveBeenCalled();
   });
 
-  it('send_message rejects an empty thread_id (reject wins)', async () => {
-    const res = await callTool('send_message', { room_id: 'room-1', content: 'hi', thread_id: '' });
+  it.each([[''], ['   ']])('send_message rejects thread_id %j without sending (reject wins)', async (thread_id) => {
+    bridgeMock.sendAsAgent.mockClear();
+    const res = await callTool('send_message', { room_id: 'room-1', content: 'hi', thread_id });
     expectArgumentReject(res, 'send_message');
+    expect(bridgeMock.sendAsAgent).not.toHaveBeenCalled();
+  });
+
+  it('send_message trims thread_id before sending and echoing it', async () => {
+    bridgeMock.sendAsAgent.mockClear().mockResolvedValue(undefined);
+    const res = await callTool('send_message', { room_id: 'room-1', content: 'hi', thread_id: '  t1  ' });
+    expect(bridgeMock.sendAsAgent).toHaveBeenCalledWith('good_token', 'room-1', 'hi', 't1');
+    expect(JSON.parse(res.body.result?.content?.[0]?.text ?? '{}')).toEqual({ ok: true, room_id: 'room-1', thread_id: 't1' });
   });
 
   it('send_message rejects an empty room_id (reject wins)', async () => {

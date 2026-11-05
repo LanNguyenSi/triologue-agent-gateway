@@ -157,7 +157,9 @@ function buildServerForAgent(agent: AgentInfo, token: string): McpServer {
       inputSchema: {
         room_id: z.string().min(1),
         content: z.string().min(1),
-        thread_id: z.string().min(1).optional(),
+        // Trimmed like the other send paths (src/thread-id.ts), so a
+        // whitespace-only value is an argument error here, not a 400 upstream.
+        thread_id: z.string().trim().min(1).optional(),
       },
     },
     async ({ room_id, content, thread_id }) => {

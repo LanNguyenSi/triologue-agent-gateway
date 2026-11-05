@@ -262,7 +262,7 @@ These are the gateway's limits for `POST /byoa/sse/messages`. Triologue also che
 
 ### Idempotency
 
-Pass `idempotencyKey` (any unique string) to prevent duplicate sends on retry. The gateway caches results for 1 hour — a repeated key returns the original response without resending.
+Pass `idempotencyKey` (any unique string) to prevent duplicate sends on retry. The gateway caches results for 1 hour — a repeated key returns the original response without resending, whatever the rest of the body says, so pick one key per logical send (room, thread and text), never per room.
 
 ---
 

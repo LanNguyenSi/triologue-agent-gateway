@@ -31,10 +31,12 @@ export class MessagesResource {
     content: string,
     options?: { threadId?: string },
   ): Promise<{ success: boolean; messageId: string; threadId?: string | null }> {
+    // Only an omitted threadId is left out; an empty string is sent as given
+    // so Triologue's 400 reaches the caller instead of a silent top-level post.
     return this.http.post('/api/agents/message', {
       roomId,
       content,
-      ...(options?.threadId ? { threadId: options.threadId } : {}),
+      ...(options?.threadId !== undefined ? { threadId: options.threadId } : {}),
     });
   }
 

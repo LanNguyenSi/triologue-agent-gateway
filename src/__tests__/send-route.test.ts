@@ -48,7 +48,7 @@ process.env.GATEWAY_TOKEN = 'test-gateway-token';
 // reachable both in the factory closure and in test assertions.
 
 const mocks = vi.hoisted(() => ({
-  sendAsAgent: vi.fn<(token: string, room: string, content: string) => Promise<void>>(),
+  sendAsAgent: vi.fn<(token: string, room: string, content: string, threadId: string | null) => Promise<void>>(),
   onMessage: vi.fn(),
   onTaskAssigned: vi.fn(),
   authenticateToken: vi.fn<(token: string) => AgentInfo | null>(),
