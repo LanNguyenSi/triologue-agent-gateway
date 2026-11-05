@@ -3,7 +3,7 @@ type: module
 title: Process bootstrap and local state
 description: What importing src/index.ts already does (router mount order for the raw-body HMAC route, Redis clients, metrics timer), the module-is-main guard and its extensionless-invocation trap, the startup order from the GATEWAY_TOKEN check to listen, and where the gateway keeps local state, including under the Docker runtime user.
 tags: [bootstrap, startup, entrypoint, local-state, redis, docker]
-timestamp: 2026-11-05T06:36:21Z
+timestamp: 2026-11-05T06:49:28Z
 sources:
   - src/index.ts
   - src/agent-tasks-bridge.ts
@@ -47,14 +47,17 @@ steps without the guard:
   Moving `express.json()` above it would consume the body first. Building
   the router logs a warning when the bridge is disabled or runs in unsigned
   mode (`src/agent-tasks-bridge.ts:220-227#"ALLOW_UNSIGNED=true , accepting"`).
-- Mounts `/byoa/sse` and `/byoa/mcp` behind the JSON parser
-  (`src/index.ts:81-85#"app.use('/byoa/mcp', mcpRouter);"`).
+- Mounts `/byoa/sse`, `/byoa/mcp` and `/byoa/sessions` behind the JSON parser
+  (`src/index.ts:93#"app.use('/byoa/sessions', createSessionsRouter(sessionRegistry));"`).
 - Constructs the `TriologueBridge` without connecting it
   (`src/index.ts:112-116#"userType: 'AI_AGENT',"`) and attaches the
   WebSocket server at `/byoa/ws` to the HTTP server
   (`src/index.ts:530#"const wss = new WebSocketServer({ server, path: '/byoa/ws' });"`).
-- Through its imports: opens two Redis clients for `REDIS_URL`, defaulting
-  to `redis://localhost:6379` (`src/byoa-sse.ts:36-37#"const redisSub = new Redis("`);
+- Opens three Redis clients for `REDIS_URL`, defaulting to
+  `redis://localhost:6379`: two through the `byoa-sse` import
+  (`src/byoa-sse.ts:36-37#"const redisSub = new Redis("`) and one of its own
+  for the session registry
+  (`src/index.ts:90#"const sessionRedis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');"`);
   starts the metrics flush timer, which appends a snapshot every 60 seconds
   (`src/metrics.ts:41-61#"this.flushInterval = setInterval(() => this.flush(), 60_000);"`);
   and reads the OpenClaw config and device files once

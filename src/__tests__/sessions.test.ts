@@ -33,8 +33,10 @@ vi.mock('../metrics', () => ({
 const {
   SessionRegistry,
   createSessionsRouter,
+  BindingLimitError,
   SESSION_TTL_SECONDS,
   HEARTBEAT_SECONDS,
+  MAX_SESSION_BINDINGS,
 } = await import('../sessions.js');
 type Registry = InstanceType<typeof SessionRegistry>;
 type PresenceEvent = import('../sessions.js').PresenceEvent;
@@ -104,6 +106,25 @@ class FakeRedis {
   async smembers(key: string): Promise<string[]> {
     this.reap(key);
     return [...(this.sets.get(key) ?? [])];
+  }
+
+  async scard(key: string): Promise<number> {
+    this.reap(key);
+    return this.sets.get(key)?.size ?? 0;
+  }
+
+  /** A pipeline that applies its queued commands in order on exec(). */
+  multi() {
+    const queue: Array<() => Promise<unknown>> = [];
+    const pipe = {
+      hset: (key: string, fields: Record<string, string>) => { queue.push(() => this.hset(key, fields)); return pipe; },
+      expire: (key: string, seconds: number) => { queue.push(() => this.expire(key, seconds)); return pipe; },
+      sadd: (key: string, ...members: string[]) => { queue.push(() => this.sadd(key, ...members)); return pipe; },
+      srem: (key: string, ...members: string[]) => { queue.push(() => this.srem(key, ...members)); return pipe; },
+      del: (...keys: string[]) => { queue.push(() => this.del(...keys)); return pipe; },
+      exec: async () => { const out: unknown[] = []; for (const op of queue) out.push([null, await op()]); return out; },
+    };
+    return pipe;
   }
 
   async del(...keys: string[]): Promise<number> {
@@ -242,10 +263,12 @@ describe('SessionRegistry', () => {
 
     expect(await registry.remove('agent-a', 'sess-1')).toBe(true);
 
+    // Checked before any read that could prune lazily: remove itself must
+    // have dropped the hash, the session set entry and every binding.
+    expect(redis.keys().filter((k) => k.includes('sess-1'))).toEqual([]);
     expect(await registry.list('agent-a')).toEqual([]);
     expect(await registry.sessionsForRoom('agent-a', 'room-1')).toEqual([]);
     expect(await registry.sessionsForThread('agent-a', 't-1')).toEqual([]);
-    expect(redis.keys().filter((k) => k.includes('sess-1'))).toEqual([]);
     expect(events).toEqual([{ agentId: 'agent-a', sessionId: 'sess-1', status: 'offline', detail: null, session: null }]);
     expect(await registry.remove('agent-a', 'sess-1')).toBe(false);
     expect(events).toHaveLength(1);
@@ -268,8 +291,88 @@ describe('SessionRegistry', () => {
     expect(await registry.sessionsForRoom('agent-b', 'room-1')).toEqual([]);
     expect(events.map((e) => `${e.agentId}/${e.sessionId}/${e.status}`).sort()).toEqual(['agent-a/old/offline', 'agent-b/gone/offline']);
     expect(await registry.sweep()).toBe(0);
-    // agent-b has no sessions left, so a later sweep no longer visits it.
-    expect(await redis.smembers('sessions:agents')).toEqual(['agent-a']);
+    // The agents set is never shrunk (bounded by the number of agents; a
+    // shrink would race a concurrent connect).
+    expect((await redis.smembers('sessions:agents')).sort()).toEqual(['agent-a', 'agent-b']);
+  });
+
+  it('a reconnect with an expired sessionId starts over without the old bindings', async () => {
+    const { redis, registry } = makeRegistry();
+    const first = await registry.connect('agent-a', { ...connectInput, sessionId: 'sess-1', rooms: ['room-old'], threads: ['t-old'] });
+    redis.tick(SESSION_TTL_SECONDS * 1000 + 1); // expired, not yet pruned by anyone
+
+    const again = await registry.connect('agent-a', { ...connectInput, sessionId: 'sess-1', rooms: ['room-new'] });
+
+    expect(again.rooms).toEqual(['room-new']);
+    expect(again.threads).toEqual([]);
+    expect(again.startedAt).not.toBe(first.startedAt);
+    expect(await registry.sessionsForRoom('agent-a', 'room-old')).toEqual([]);
+    expect(await registry.sessionsForThread('agent-a', 't-old')).toEqual([]);
+  });
+
+  it('a reconnect of a live session adds bindings instead of replacing them', async () => {
+    const { registry } = makeRegistry();
+    await registry.connect('agent-a', { ...connectInput, sessionId: 'sess-1', rooms: ['room-1'] });
+
+    const again = await registry.connect('agent-a', { ...connectInput, sessionId: 'sess-1', rooms: ['room-2'] });
+
+    expect(again.rooms).toEqual(['room-1', 'room-2']);
+  });
+
+  it('a prune that races a reconnect keeps the fresh session (expire re-checks the hash)', async () => {
+    const { redis, registry, events } = makeRegistry();
+    await registry.connect('agent-a', { ...connectInput, sessionId: 'sess-1', rooms: ['room-1'] });
+    events.length = 0;
+    // The reader saw the hash missing; by the time it prunes, the session is back.
+    vi.spyOn(redis, 'exists').mockResolvedValueOnce(0);
+
+    expect(await registry.sessionsForRoom('agent-a', 'room-1')).toEqual([]);
+
+    expect(await registry.sessionsForRoom('agent-a', 'room-1')).toEqual(['sess-1']);
+    expect((await registry.get('agent-a', 'sess-1'))?.rooms).toEqual(['room-1']);
+    expect(events).toEqual([]);
+  });
+
+  it('heartbeat on a hash that vanished after the check does not resurrect it', async () => {
+    const { redis, registry, events } = makeRegistry();
+    await registry.connect('agent-a', { ...connectInput, sessionId: 'sess-1', rooms: ['room-1'] });
+    events.length = 0;
+    redis.tick(SESSION_TTL_SECONDS * 1000 + 1);
+    // The pre-write check still saw the hash.
+    vi.spyOn(redis, 'exists').mockResolvedValueOnce(1);
+
+    expect(await registry.heartbeat('agent-a', 'sess-1')).toBe(false);
+
+    expect(redis.keys().filter((k) => k.includes('sess-1'))).toEqual([]);
+    expect(await registry.list('agent-a')).toEqual([]);
+    expect(events).toEqual([{ agentId: 'agent-a', sessionId: 'sess-1', status: 'offline', detail: null, session: null }]);
+  });
+
+  it('bind after the session ended mid-write leaves nothing behind', async () => {
+    const { redis, registry } = makeRegistry();
+    await registry.connect('agent-a', { ...connectInput, sessionId: 'sess-1' });
+    // exists() says alive before the write and gone after it.
+    const spy = vi.spyOn(redis, 'exists');
+    spy.mockResolvedValueOnce(1).mockResolvedValueOnce(0);
+
+    expect(await registry.bind('agent-a', 'sess-1', ['room-9'], [])).toBeNull();
+
+    spy.mockRestore();
+    expect(await redis.smembers('bind:room:room-9:agent-a')).toEqual([]);
+    expect(await redis.smembers('sessbind:agent-a:sess-1')).toEqual([]);
+  });
+
+  it('caps the bindings of one session at MAX_SESSION_BINDINGS', async () => {
+    const { registry } = makeRegistry();
+    await registry.connect('agent-a', { ...connectInput, sessionId: 'sess-1' });
+    const rooms = Array.from({ length: MAX_SESSION_BINDINGS }, (_, i) => `room-${i}`);
+    await registry.bind('agent-a', 'sess-1', rooms.slice(0, 100), []);
+    await registry.bind('agent-a', 'sess-1', rooms.slice(100), []);
+
+    // Re-binding known ids is free; one new id over the cap is refused.
+    await expect(registry.bind('agent-a', 'sess-1', rooms.slice(0, 5), [])).resolves.toMatchObject({ rooms: expect.any(Array) });
+    await expect(registry.bind('agent-a', 'sess-1', ['one-more'], [])).rejects.toBeInstanceOf(BindingLimitError);
+    expect((await registry.get('agent-a', 'sess-1'))?.rooms).toHaveLength(MAX_SESSION_BINDINGS);
   });
 });
 
@@ -363,8 +466,9 @@ describe('POST /byoa/sessions/connect', () => {
     ['runtime missing', { host: 'h', cwd: '/x' }, 'runtime is required'],
     ['cwd empty', { runtime: 'claude', host: 'h', cwd: '  ' }, 'cwd must be a non-empty string of at most 1024 characters'],
     ['sessionId with a slash', { ...connectInput, sessionId: 'a/b' }, 'sessionId must match [A-Za-z0-9_-]{1,64}'],
-    ['rooms not an array', { ...connectInput, rooms: 'room-1' }, 'rooms must be an array of at most 50 non-empty strings'],
-    ['threads with an empty id', { ...connectInput, threads: [''] }, 'threads must be an array of at most 50 non-empty strings'],
+    ['rooms not an array', { ...connectInput, rooms: 'room-1' }, 'rooms must be an array of at most 50 ids matching [A-Za-z0-9_-]{1,128}'],
+    ['threads with an empty id', { ...connectInput, threads: [''] }, 'threads must be an array of at most 50 ids matching [A-Za-z0-9_-]{1,128}'],
+    ['a room id with a slash', { ...connectInput, rooms: ['a/b'] }, 'rooms must be an array of at most 50 ids matching [A-Za-z0-9_-]{1,128}'],
   ])('answers 400 when %s', async (_label, body, error) => {
     const res = await call('POST', '/byoa/sessions/connect', 'tok-a', body);
     expect(res.status).toBe(400);
@@ -415,8 +519,32 @@ describe('session lifecycle over HTTP', () => {
     expect((await call('POST', '/byoa/sessions/http-own/heartbeat', 'tok-b')).status).toBe(404);
     expect((await call('POST', '/byoa/sessions/http-own/presence', 'tok-b', { status: 'working' })).status).toBe(404);
     expect((await call('POST', '/byoa/sessions/http-own/bind', 'tok-b', { rooms: ['r'] })).status).toBe(404);
+    expect((await call('DELETE', '/byoa/sessions/http-own/bind', 'tok-b', { rooms: ['r'] })).status).toBe(404);
     expect((await call('DELETE', '/byoa/sessions/http-own', 'tok-b')).status).toBe(404);
     expect(await registry.get('agent-a', 'http-own')).not.toBeNull();
+    expect(await registry.get('agent-b', 'http-own')).toBeNull();
+  });
+
+  it('answers 500 instead of crashing when the store fails', async () => {
+    await call('POST', '/byoa/sessions/connect', 'tok-a', { ...connectInput, sessionId: 'http-err' });
+    vi.spyOn(registry, 'heartbeat').mockRejectedValueOnce(new Error('redis is down'));
+    const silence = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const res = await call('POST', '/byoa/sessions/http-err/heartbeat', 'tok-a');
+
+    silence.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Session store unavailable' });
+  });
+
+  it('answers 400 when a bind would exceed the per-session cap', async () => {
+    await call('POST', '/byoa/sessions/connect', 'tok-a', { ...connectInput, sessionId: 'http-cap' });
+    vi.spyOn(registry, 'bind').mockRejectedValueOnce(new BindingLimitError());
+
+    const res = await call('POST', '/byoa/sessions/http-cap/bind', 'tok-a', { rooms: ['r'] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe(`a session may hold at most ${MAX_SESSION_BINDINGS} room and thread bindings`);
   });
 
   it('answers 404 for a malformed session id without touching the store', async () => {

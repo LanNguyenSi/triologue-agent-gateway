@@ -23,7 +23,6 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import crypto from 'crypto';
 import { EventEmitter } from 'node:events';
-import type { Redis } from 'ioredis';
 import { authenticateToken } from './auth.js';
 import { consumeWindow } from './rate-window.js';
 import { metrics } from './metrics.js';
@@ -32,12 +31,38 @@ import type { AgentInfo } from './types.js';
 export const SESSION_TTL_SECONDS = 90;
 export const HEARTBEAT_SECONDS = 30;
 export const SWEEP_INTERVAL_MS = 30_000;
+/** Rooms plus threads one session may be bound to at once. */
+export const MAX_SESSION_BINDINGS = 200;
 
 export const SESSION_STATUSES = ['online', 'working', 'waiting_approval', 'error'] as const;
 export type SessionStatus = (typeof SESSION_STATUSES)[number];
 
-/** The Redis commands the registry uses; a test can pass an in-memory stand-in. */
-export type SessionStore = Pick<Redis, 'hset' | 'hgetall' | 'expire' | 'sadd' | 'srem' | 'smembers' | 'del' | 'exists'>;
+/**
+ * The Redis surface the registry uses (an ioredis client satisfies it; the
+ * tests pass an in-memory stand-in). Writes that must land together go
+ * through `multi()`, so a hash can never exist without its TTL.
+ */
+export interface SessionPipeline {
+  hset(key: string, fields: Record<string, string>): SessionPipeline;
+  expire(key: string, seconds: number): SessionPipeline;
+  sadd(key: string, ...members: string[]): SessionPipeline;
+  srem(key: string, ...members: string[]): SessionPipeline;
+  del(...keys: string[]): SessionPipeline;
+  exec(): Promise<unknown>;
+}
+
+export interface SessionStore {
+  hset(key: string, fields: Record<string, string>): Promise<number>;
+  hgetall(key: string): Promise<Record<string, string>>;
+  expire(key: string, seconds: number): Promise<number>;
+  sadd(key: string, ...members: string[]): Promise<number>;
+  srem(key: string, ...members: string[]): Promise<number>;
+  smembers(key: string): Promise<string[]>;
+  scard(key: string): Promise<number>;
+  del(...keys: string[]): Promise<number>;
+  exists(...keys: string[]): Promise<number>;
+  multi(): SessionPipeline;
+}
 
 export interface AgentSession {
   sessionId: string;
@@ -75,10 +100,18 @@ export interface PresenceEvent {
   session: AgentSession | null;
 }
 
+/** Thrown by bind() and connect() when a session would exceed MAX_SESSION_BINDINGS. */
+export class BindingLimitError extends Error {
+  constructor() {
+    super(`a session may hold at most ${MAX_SESSION_BINDINGS} room and thread bindings`);
+    this.name = 'BindingLimitError';
+  }
+}
+
 // ── Keys ──
 // session:<agentId>:<sessionId>   HASH, TTL  the session's metadata and status
 // sessions:<agentId>              SET        sessionIds of that agent (pruned lazily and by sweep)
-// sessions:agents                 SET        agentIds that have (had) sessions, for the sweep
+// sessions:agents                 SET        agentIds that ever had a session, for the sweep
 // sessbind:<agentId>:<sessionId>  SET        "room:<id>" / "thread:<id>" members, no TTL
 // bind:room:<roomId>:<agentId>    SET        sessionIds bound to the room
 // bind:thread:<threadId>:<agentId> SET       sessionIds bound to the thread
@@ -98,31 +131,42 @@ export class SessionRegistry extends EventEmitter {
     super();
   }
 
-  /** Register a session, or refresh one that reconnects with its own sessionId. */
+  /**
+   * Register a session, or refresh one that reconnects with its own
+   * sessionId. A refresh keeps the recorded start time and status and adds
+   * the given rooms and threads to the existing bindings. A sessionId whose
+   * hash has expired starts over: whatever bindings its predecessor left
+   * behind are dropped first.
+   */
   async connect(agentId: string, input: ConnectInput): Promise<AgentSession> {
     const sessionId = input.sessionId ?? crypto.randomUUID();
     const key = sessionKey(agentId, sessionId);
     const existing = await this.store.hgetall(key);
+    if (!existing.sessionId) await this.dropBindings(agentId, sessionId);
+
     const nowIso = new Date(this.now()).toISOString();
     const startedAt = existing.startedAt ?? nowIso;
     const status: SessionStatus = isStatus(existing.status) ? existing.status : 'online';
 
-    await this.store.hset(key, {
-      sessionId,
-      agentId,
-      runtime: input.runtime,
-      host: input.host,
-      cwd: input.cwd,
-      project: input.project ?? '',
-      claudeSessionId: input.claudeSessionId ?? '',
-      status,
-      detail: existing.detail ?? '',
-      startedAt,
-      lastHeartbeat: nowIso,
-    });
-    await this.store.expire(key, SESSION_TTL_SECONDS);
-    await this.store.sadd(sessionsKey(agentId), sessionId);
-    await this.store.sadd(AGENTS_KEY, agentId);
+    await this.store
+      .multi()
+      .hset(key, {
+        sessionId,
+        agentId,
+        runtime: input.runtime,
+        host: input.host,
+        cwd: input.cwd,
+        project: input.project ?? '',
+        claudeSessionId: input.claudeSessionId ?? '',
+        status,
+        detail: existing.detail ?? '',
+        startedAt,
+        lastHeartbeat: nowIso,
+      })
+      .expire(key, SESSION_TTL_SECONDS)
+      .sadd(sessionsKey(agentId), sessionId)
+      .sadd(AGENTS_KEY, agentId)
+      .exec();
 
     if (input.rooms?.length || input.threads?.length) {
       await this.bind(agentId, sessionId, input.rooms ?? [], input.threads ?? []);
@@ -135,34 +179,49 @@ export class SessionRegistry extends EventEmitter {
 
   /** Extend the session's TTL. False when the session is unknown or expired. */
   async heartbeat(agentId: string, sessionId: string): Promise<boolean> {
-    const key = sessionKey(agentId, sessionId);
-    if (!(await this.store.exists(key))) return false;
-    await this.store.hset(key, { lastHeartbeat: new Date(this.now()).toISOString() });
-    await this.store.expire(key, SESSION_TTL_SECONDS);
-    return true;
+    return this.touch(agentId, sessionId, { lastHeartbeat: new Date(this.now()).toISOString() });
   }
 
   /** Set the status; counts as a heartbeat. False when the session is unknown. */
   async setPresence(agentId: string, sessionId: string, status: SessionStatus, detail: string | null = null): Promise<boolean> {
-    const key = sessionKey(agentId, sessionId);
-    if (!(await this.store.exists(key))) return false;
-    await this.store.hset(key, { status, detail: detail ?? '', lastHeartbeat: new Date(this.now()).toISOString() });
-    await this.store.expire(key, SESSION_TTL_SECONDS);
+    const alive = await this.touch(agentId, sessionId, {
+      status,
+      detail: detail ?? '',
+      lastHeartbeat: new Date(this.now()).toISOString(),
+    });
+    if (!alive) return false;
     const session = await this.get(agentId, sessionId);
     this.emit('presence', { agentId, sessionId, status, detail, session } satisfies PresenceEvent);
     return true;
   }
 
-  /** Bind rooms and threads to the session. Null when the session is unknown. */
+  /**
+   * Bind rooms and threads to the session. Null when the session is unknown
+   * (or ended while the bindings were written: they are dropped again);
+   * throws BindingLimitError when the session would exceed MAX_SESSION_BINDINGS.
+   */
   async bind(agentId: string, sessionId: string, rooms: string[], threads: string[]): Promise<{ rooms: string[]; threads: string[] } | null> {
-    if (!(await this.store.exists(sessionKey(agentId, sessionId)))) return null;
-    for (const roomId of rooms) {
-      await this.store.sadd(roomBindKey(roomId, agentId), sessionId);
-      await this.store.sadd(sessBindKey(agentId, sessionId), `room:${roomId}`);
-    }
-    for (const threadId of threads) {
-      await this.store.sadd(threadBindKey(threadId, agentId), sessionId);
-      await this.store.sadd(sessBindKey(agentId, sessionId), `thread:${threadId}`);
+    const key = sessionKey(agentId, sessionId);
+    if (!(await this.store.exists(key))) return null;
+
+    const members = [...rooms.map((r) => `room:${r}`), ...threads.map((t) => `thread:${t}`)];
+    if (members.length > 0) {
+      const current = new Set(await this.store.smembers(sessBindKey(agentId, sessionId)));
+      const added = members.filter((m) => !current.has(m));
+      if (current.size + added.length > MAX_SESSION_BINDINGS) throw new BindingLimitError();
+
+      const pipe = this.store.multi();
+      for (const roomId of rooms) pipe.sadd(roomBindKey(roomId, agentId), sessionId);
+      for (const threadId of threads) pipe.sadd(threadBindKey(threadId, agentId), sessionId);
+      pipe.sadd(sessBindKey(agentId, sessionId), ...members);
+      await pipe.exec();
+
+      // The session may have ended while we wrote: do not leave bindings
+      // behind that no sweep would visit.
+      if (!(await this.store.exists(key))) {
+        await this.dropBindings(agentId, sessionId);
+        return null;
+      }
     }
     return this.bindings(agentId, sessionId);
   }
@@ -170,13 +229,13 @@ export class SessionRegistry extends EventEmitter {
   /** Remove bindings from the session. Null when the session is unknown. */
   async unbind(agentId: string, sessionId: string, rooms: string[], threads: string[]): Promise<{ rooms: string[]; threads: string[] } | null> {
     if (!(await this.store.exists(sessionKey(agentId, sessionId)))) return null;
-    for (const roomId of rooms) {
-      await this.store.srem(roomBindKey(roomId, agentId), sessionId);
-      await this.store.srem(sessBindKey(agentId, sessionId), `room:${roomId}`);
-    }
-    for (const threadId of threads) {
-      await this.store.srem(threadBindKey(threadId, agentId), sessionId);
-      await this.store.srem(sessBindKey(agentId, sessionId), `thread:${threadId}`);
+    const members = [...rooms.map((r) => `room:${r}`), ...threads.map((t) => `thread:${t}`)];
+    if (members.length > 0) {
+      const pipe = this.store.multi();
+      for (const roomId of rooms) pipe.srem(roomBindKey(roomId, agentId), sessionId);
+      for (const threadId of threads) pipe.srem(threadBindKey(threadId, agentId), sessionId);
+      pipe.srem(sessBindKey(agentId, sessionId), ...members);
+      await pipe.exec();
     }
     return this.bindings(agentId, sessionId);
   }
@@ -184,9 +243,8 @@ export class SessionRegistry extends EventEmitter {
   /** End the session: drop its hash and every binding. False when it was already gone. */
   async remove(agentId: string, sessionId: string): Promise<boolean> {
     const existed = (await this.store.exists(sessionKey(agentId, sessionId))) > 0;
+    await this.store.multi().del(sessionKey(agentId, sessionId)).srem(sessionsKey(agentId), sessionId).exec();
     await this.dropBindings(agentId, sessionId);
-    await this.store.del(sessionKey(agentId, sessionId));
-    await this.store.srem(sessionsKey(agentId), sessionId);
     if (existed) {
       this.emit('presence', { agentId, sessionId, status: 'offline', detail: null, session: null } satisfies PresenceEvent);
     }
@@ -236,23 +294,42 @@ export class SessionRegistry extends EventEmitter {
     return this.liveMembers(agentId, threadBindKey(threadId, agentId));
   }
 
-  /** Drop every session whose hash has expired; returns how many were dropped. */
+  /**
+   * Drop every session whose hash has expired; returns how many were
+   * dropped. `sessions:agents` is never shrunk: it is bounded by the number
+   * of agents, and shrinking it would race a concurrent connect.
+   */
   async sweep(): Promise<number> {
     let expired = 0;
     for (const agentId of await this.store.smembers(AGENTS_KEY)) {
-      const ids = await this.store.smembers(sessionsKey(agentId));
-      for (const sessionId of ids) {
+      for (const sessionId of await this.store.smembers(sessionsKey(agentId))) {
         if (!(await this.store.exists(sessionKey(agentId, sessionId)))) {
-          await this.expire(agentId, sessionId);
-          expired += 1;
+          if (await this.expire(agentId, sessionId)) expired += 1;
         }
       }
-      if (ids.length === 0) await this.store.srem(AGENTS_KEY, agentId);
     }
     return expired;
   }
 
   // ── internals ──
+
+  /**
+   * Write fields into a live session's hash and refresh its TTL. A hash
+   * that expired between the check and the write would come back as a
+   * one-field hash; that is detected and removed, and false is returned.
+   */
+  private async touch(agentId: string, sessionId: string, fields: Record<string, string>): Promise<boolean> {
+    const key = sessionKey(agentId, sessionId);
+    if (!(await this.store.exists(key))) return false;
+    await this.store.multi().hset(key, fields).expire(key, SESSION_TTL_SECONDS).exec();
+    const raw = await this.store.hgetall(key);
+    if (!raw.sessionId) {
+      await this.store.del(key);
+      await this.expire(agentId, sessionId);
+      return false;
+    }
+    return true;
+  }
 
   private async bindings(agentId: string, sessionId: string): Promise<{ rooms: string[]; threads: string[] }> {
     const members = await this.store.smembers(sessBindKey(agentId, sessionId));
@@ -263,16 +340,25 @@ export class SessionRegistry extends EventEmitter {
 
   private async dropBindings(agentId: string, sessionId: string): Promise<void> {
     const { rooms, threads } = await this.bindings(agentId, sessionId);
-    for (const roomId of rooms) await this.store.srem(roomBindKey(roomId, agentId), sessionId);
-    for (const threadId of threads) await this.store.srem(threadBindKey(threadId, agentId), sessionId);
-    await this.store.del(sessBindKey(agentId, sessionId));
+    const pipe = this.store.multi();
+    for (const roomId of rooms) pipe.srem(roomBindKey(roomId, agentId), sessionId);
+    for (const threadId of threads) pipe.srem(threadBindKey(threadId, agentId), sessionId);
+    pipe.del(sessBindKey(agentId, sessionId));
+    await pipe.exec();
   }
 
-  /** A session whose hash expired: clean up and announce offline. */
-  private async expire(agentId: string, sessionId: string): Promise<void> {
+  /**
+   * A session whose hash is gone: clean up and announce offline. Re-checks
+   * the hash right before the removals, so a session that reconnected with
+   * the same id in the meantime keeps its fresh bindings. Returns whether
+   * anything was expired.
+   */
+  private async expire(agentId: string, sessionId: string): Promise<boolean> {
+    if (await this.store.exists(sessionKey(agentId, sessionId))) return false;
     await this.dropBindings(agentId, sessionId);
     await this.store.srem(sessionsKey(agentId), sessionId);
     this.emit('presence', { agentId, sessionId, status: 'offline', detail: null, session: null } satisfies PresenceEvent);
+    return true;
   }
 
   private async liveMembers(agentId: string, key: string): Promise<string[]> {
@@ -292,7 +378,8 @@ function isStatus(value: unknown): value is SessionStatus {
 // ── HTTP API ──
 
 const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-const MAX_BINDINGS = 50;
+const BINDING_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+const MAX_BINDINGS_PER_CALL = 50;
 const WINDOW_MS = 60_000;
 const MAX_CALLS_PER_WINDOW = 120;
 
@@ -315,10 +402,17 @@ function requiredString(value: unknown, name: string, max: number): ParseResult<
 
 function idList(value: unknown, name: string): ParseResult<string[]> {
   if (value === undefined || value === null) return { ok: true, value: [] };
-  if (!Array.isArray(value) || value.length > MAX_BINDINGS || value.some((v) => typeof v !== 'string' || v.trim().length === 0 || v.length > 128)) {
-    return { ok: false, error: `${name} must be an array of at most ${MAX_BINDINGS} non-empty strings` };
+  if (
+    !Array.isArray(value) ||
+    value.length > MAX_BINDINGS_PER_CALL ||
+    value.some((v) => typeof v !== 'string' || !BINDING_ID_RE.test(v))
+  ) {
+    return {
+      ok: false,
+      error: `${name} must be an array of at most ${MAX_BINDINGS_PER_CALL} ids matching [A-Za-z0-9_-]{1,128}`,
+    };
   }
-  return { ok: true, value: [...new Set(value.map((v: string) => v.trim()))] };
+  return { ok: true, value: [...new Set(value as string[])] };
 }
 
 function parseConnect(body: unknown): ParseResult<ConnectInput> {
@@ -354,6 +448,27 @@ function parseConnect(body: unknown): ParseResult<ConnectInput> {
       rooms: rooms.value,
       threads: threads.value,
     },
+  };
+}
+
+type AsyncHandler = (req: Request, res: Response) => Promise<unknown>;
+
+/**
+ * Express 4 does not catch a rejected async handler: the rejection would be
+ * unhandled and end the process. Every route goes through this wrapper, so
+ * a Redis failure answers 500 (or 400 for a binding limit) instead.
+ */
+function guarded(handler: AsyncHandler) {
+  return (req: Request, res: Response, _next: NextFunction) => {
+    handler(req, res).catch((err: unknown) => {
+      if (err instanceof BindingLimitError) {
+        if (!res.headersSent) res.status(400).json({ error: err.message });
+        return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[sessions] ${req.method} ${req.originalUrl} failed: ${message}`);
+      if (!res.headersSent) res.status(500).json({ error: 'Session store unavailable' });
+    });
   };
 }
 
@@ -400,36 +515,26 @@ export function createSessionsRouter(registry: SessionRegistry): Router {
     return sessionId;
   }
 
-  router.post('/connect', authenticate, async (req, res) => {
+  router.post('/connect', authenticate, guarded(async (req, res) => {
     const parsed = parseConnect(req.body);
     if (!parsed.ok) return res.status(400).json({ error: parsed.error });
-    try {
-      const session = await registry.connect(agentOf(req).userId, parsed.value);
-      res.status(201).json({ sessionId: session.sessionId, heartbeatSeconds: HEARTBEAT_SECONDS, ttlSeconds: SESSION_TTL_SECONDS, session });
-    } catch (err: any) {
-      console.error(`[sessions] connect failed: ${err.message}`);
-      res.status(500).json({ error: 'Failed to register session' });
-    }
-  });
+    const session = await registry.connect(agentOf(req).userId, parsed.value);
+    res.status(201).json({ sessionId: session.sessionId, heartbeatSeconds: HEARTBEAT_SECONDS, ttlSeconds: SESSION_TTL_SECONDS, session });
+  }));
 
-  router.get('/', authenticate, async (req, res) => {
-    try {
-      res.json({ sessions: await registry.list(agentOf(req).userId) });
-    } catch (err: any) {
-      console.error(`[sessions] list failed: ${err.message}`);
-      res.status(500).json({ error: 'Failed to list sessions' });
-    }
-  });
+  router.get('/', authenticate, guarded(async (req, res) => {
+    res.json({ sessions: await registry.list(agentOf(req).userId) });
+  }));
 
-  router.post('/:sessionId/heartbeat', authenticate, async (req, res) => {
+  router.post('/:sessionId/heartbeat', authenticate, guarded(async (req, res) => {
     const sessionId = sessionIdOf(req, res);
     if (!sessionId) return;
     const alive = await registry.heartbeat(agentOf(req).userId, sessionId);
     if (!alive) return res.status(404).json({ error: 'Unknown session' });
     res.status(204).end();
-  });
+  }));
 
-  router.post('/:sessionId/presence', authenticate, async (req, res) => {
+  router.post('/:sessionId/presence', authenticate, guarded(async (req, res) => {
     const sessionId = sessionIdOf(req, res);
     if (!sessionId) return;
     const body = (req.body ?? {}) as Record<string, unknown>;
@@ -447,7 +552,7 @@ export function createSessionsRouter(registry: SessionRegistry): Router {
     const alive = await registry.setPresence(agentOf(req).userId, sessionId, status, detail.value);
     if (!alive) return res.status(404).json({ error: 'Unknown session' });
     res.status(204).end();
-  });
+  }));
 
   async function changeBindings(req: Request, res: Response, apply: 'bind' | 'unbind') {
     const sessionId = sessionIdOf(req, res);
@@ -462,16 +567,16 @@ export function createSessionsRouter(registry: SessionRegistry): Router {
     res.json(result);
   }
 
-  router.post('/:sessionId/bind', authenticate, (req, res) => changeBindings(req, res, 'bind'));
-  router.delete('/:sessionId/bind', authenticate, (req, res) => changeBindings(req, res, 'unbind'));
+  router.post('/:sessionId/bind', authenticate, guarded((req, res) => changeBindings(req, res, 'bind')));
+  router.delete('/:sessionId/bind', authenticate, guarded((req, res) => changeBindings(req, res, 'unbind')));
 
-  router.delete('/:sessionId', authenticate, async (req, res) => {
+  router.delete('/:sessionId', authenticate, guarded(async (req, res) => {
     const sessionId = sessionIdOf(req, res);
     if (!sessionId) return;
     const existed = await registry.remove(agentOf(req).userId, sessionId);
     if (!existed) return res.status(404).json({ error: 'Unknown session' });
     res.status(204).end();
-  });
+  }));
 
   return router;
 }
