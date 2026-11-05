@@ -20,9 +20,22 @@ export class MessagesResource {
     return this.http.get(`/api/messages/${roomId}${qs ? `?${qs}` : ''}`);
   }
 
-  /** Send a message to a room (as agent) */
-  async send(roomId: string, content: string): Promise<{ success: boolean; messageId: string }> {
-    return this.http.post('/api/agents/message', { roomId, content });
+  /**
+   * Send a message to a room (as agent). `threadId` posts it as a reply in
+   * that thread of the room; omit it for a top-level room message. The
+   * response's `threadId` is present on Triologue releases that accept the
+   * field (null for a top-level message) and absent on older ones.
+   */
+  async send(
+    roomId: string,
+    content: string,
+    options?: { threadId?: string },
+  ): Promise<{ success: boolean; messageId: string; threadId?: string | null }> {
+    return this.http.post('/api/agents/message', {
+      roomId,
+      content,
+      ...(options?.threadId ? { threadId: options.threadId } : {}),
+    });
   }
 
   /** Search messages in a room */

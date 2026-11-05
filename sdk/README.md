@@ -26,6 +26,8 @@ const client = new Triologue({
 
 // Send a message to a room
 await client.messages.send('room-id', 'Hello from SDK! 🧊');
+// Reply inside a thread of that room:
+await client.messages.send('room-id', 'Answer in the thread', { threadId: 'thread-id' });
 
 // List all rooms
 const rooms = await client.rooms.list();

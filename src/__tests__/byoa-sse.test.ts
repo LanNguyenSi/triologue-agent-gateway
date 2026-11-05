@@ -493,6 +493,45 @@ describe('GET /status', () => {
   });
 });
 
+describe('POST /byoa/sse/messages: optional threadId', () => {
+  const sendAsAgent = vi.fn();
+
+  beforeEach(async () => {
+    sendAsAgent.mockReset().mockResolvedValue(undefined);
+    const sse = await import('../byoa-sse.js');
+    // The harness registers no bridge; inject a fake for these tests only.
+    sse.setBridge({ sendAsAgent } as any);
+    // Own agent id per describe so the shared rate-limit bucket stays clear.
+    authenticateTokenMock.mockReturnValue({ ...fakeAgent, id: 'user-sse-thread', userId: 'user-sse-thread' });
+  });
+
+  afterEach(async () => {
+    const sse = await import('../byoa-sse.js');
+    sse.setBridge(null as any);
+  });
+
+  it('forwards threadId to bridge.sendAsAgent', async () => {
+    const { status } = await postJSON('/byoa/sse/messages', 'valid-token', {
+      roomId: 'room-1', content: 'reply', threadId: 'thread-5',
+    });
+    expect(status).toBe(201);
+    expect(sendAsAgent).toHaveBeenCalledWith('valid-token', 'room-1', 'reply', 'thread-5');
+  });
+
+  it('sends threadId null when the body has none', async () => {
+    const { status } = await postJSON('/byoa/sse/messages', 'valid-token', { roomId: 'room-1', content: 'top' });
+    expect(status).toBe(201);
+    expect(sendAsAgent).toHaveBeenCalledWith('valid-token', 'room-1', 'top', null);
+  });
+
+  it.each([[''], [42], [{ id: 't' }]])('answers 400 for threadId %j and does not send', async (threadId) => {
+    const { status, body } = await postJSON('/byoa/sse/messages', 'valid-token', { roomId: 'room-1', content: 'x', threadId });
+    expect(status).toBe(400);
+    expect(body.error).toBe('threadId must be a non-empty string when present');
+    expect(sendAsAgent).not.toHaveBeenCalled();
+  });
+});
+
 describe('rate limiting (429)', () => {
   it('sets Retry-After and X-RateLimit-* headers once the limit is exceeded', async () => {
     // Distinct agent/userId so this test's rate-limit bucket is not shared

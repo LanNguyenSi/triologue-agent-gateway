@@ -75,6 +75,28 @@ describe('MessagesResource', () => {
     expect(result).toEqual({ success: true, messageId: 'm1' });
   });
 
+  it('send(roomId, content, { threadId }) → adds threadId to the body', async () => {
+    const http = makeHttp();
+    http.post.mockResolvedValue({ success: true, messageId: 'm2', threadId: 't1' });
+    const messages = new MessagesResource(http);
+
+    const result = await messages.send('r1', 'reply', { threadId: 't1' });
+
+    expect(http.post).toHaveBeenCalledWith('/api/agents/message', { roomId: 'r1', content: 'reply', threadId: 't1' });
+    expect(result.threadId).toBe('t1');
+  });
+
+  it('send() with an empty options object leaves threadId out of the body', async () => {
+    const http = makeHttp();
+    http.post.mockResolvedValue({ success: true, messageId: 'm3' });
+    const messages = new MessagesResource(http);
+
+    await messages.send('r1', 'top', {});
+
+    // MUTATION GUARD: spreading `{ threadId: undefined }` would add the key
+    expect(http.post).toHaveBeenCalledWith('/api/agents/message', { roomId: 'r1', content: 'top' });
+  });
+
   it('search(roomId, query) → GET with URL-encoded query', async () => {
     const http = makeHttp();
     http.get.mockResolvedValue({ messages: [] });

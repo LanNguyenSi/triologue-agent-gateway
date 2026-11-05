@@ -112,6 +112,18 @@ describe('sendAsAgent', () => {
     );
   });
 
+  it('adds threadId to the body only when one is given', async () => {
+    axiosMocks.post.mockResolvedValue({ data: {} });
+    const bridge = makeBridge();
+
+    await bridge.sendAsAgent('byoa_agent_tok', 'room-1', 'in thread', 'thread-9');
+    await bridge.sendAsAgent('byoa_agent_tok', 'room-1', 'top level', null);
+
+    expect(axiosMocks.post.mock.calls[0][1]).toEqual({ roomId: 'room-1', content: 'in thread', threadId: 'thread-9' });
+    // null leaves the key out entirely, so an older Triologue sees the old body.
+    expect(axiosMocks.post.mock.calls[1][1]).toEqual({ roomId: 'room-1', content: 'top level' });
+  });
+
   it.each(['NO_REPLY', 'HEARTBEAT_OK', '  NO_REPLY  '])(
     'filters the control string "%s" without calling axios (M1)',
     async (content) => {

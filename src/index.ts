@@ -18,6 +18,7 @@ import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAg
 import { dispatchWebhook } from './webhook-dispatch.js';
 import { TriologueBridge } from './triologue-bridge.js';
 import { shouldDeliver, isMentioned } from './loop-guard.js';
+import { parseThreadId } from './thread-id.js';
 import { injectToSession } from './openclaw-inject.js';
 import { openClawReplyHint } from './openclaw-paths.js';
 import { loadReadTracker, getLastSeenMessageId, markMessageSeen } from './read-tracker.js';
@@ -331,11 +332,13 @@ app.post('/send', async (req, res) => {
   const agent = authenticateToken(token);
   if (!agent) return res.status(403).json({ error: 'Invalid token' });
 
-  const { room, content, replyTo } = req.body;
+  const { room, content, replyTo, threadId } = req.body;
   if (!room || !content) return res.status(400).json({ error: 'room and content required' });
+  const thread = parseThreadId(threadId);
+  if (!thread.ok) return res.status(400).json({ error: thread.error });
 
   try {
-    await bridge.sendAsAgent(token, room, content);
+    await bridge.sendAsAgent(token, room, content, thread.threadId);
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -594,10 +597,20 @@ wss.on('connection', (ws) => {
         return;
       }
 
+      const thread = parseThreadId(event.threadId);
+      if (!thread.ok) {
+        safeSend(ws, { type: 'error', code: 'INVALID_MESSAGE', message: thread.error });
+        return;
+      }
+
       try {
         const token = (client as any)._token;
-        await bridge.sendAsAgent(token, event.room, event.content);
-        safeSend(ws, { type: 'message_sent', room: event.room });
+        await bridge.sendAsAgent(token, event.room, event.content, thread.threadId);
+        safeSend(ws, {
+          type: 'message_sent',
+          room: event.room,
+          ...(thread.threadId ? { threadId: thread.threadId } : {}),
+        });
       } catch (err: any) {
         safeSend(ws, { type: 'error', code: 'SEND_FAILED', message: err.message });
       }

@@ -172,8 +172,13 @@ export class TriologueBridge {
    * 
    * Filters out control strings (NO_REPLY, HEARTBEAT_OK) that should never
    * appear as chat messages.
+   *
+   * `threadId` posts the message as a reply in that thread of the room;
+   * null (the default) posts a top-level room message and leaves the
+   * field out of the request body, so older Triologue servers see the
+   * same body as before.
    */
-  async sendAsAgent(agentToken: string, roomId: string, content: string): Promise<void> {
+  async sendAsAgent(agentToken: string, roomId: string, content: string, threadId: string | null = null): Promise<void> {
     // Filter control strings that should never be sent to chat
     const trimmed = content.trim();
     if (trimmed === 'NO_REPLY' || trimmed === 'HEARTBEAT_OK') {
@@ -184,6 +189,7 @@ export class TriologueBridge {
     await axios.post(`${this.config.trioUrl}/api/agents/message`, {
       roomId,
       content,
+      ...(threadId ? { threadId } : {}),
     }, {
       headers: { 'Authorization': `Bearer ${agentToken}` },
     });

@@ -167,7 +167,29 @@ describe('byoa-mcp tool dispatch', () => {
       'good_token',
       'room-1',
       'hello from mcp',
+      null,
     );
+  });
+
+  it('send_message forwards thread_id to bridge.sendAsAgent and echoes it', async () => {
+    bridgeMock.sendAsAgent.mockResolvedValue(undefined);
+    const callRes = await mcpRequest(
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'send_message',
+          arguments: { room_id: 'room-1', content: 'in thread', thread_id: 'thread-2' },
+        },
+      },
+      { Authorization: 'Bearer good_token' },
+    );
+
+    expect(callRes.status).toBe(200);
+    expect(bridgeMock.sendAsAgent).toHaveBeenCalledWith('good_token', 'room-1', 'in thread', 'thread-2');
+    const text = (callRes.body as { result?: { content?: Array<{ text: string }> } }).result?.content?.[0]?.text ?? '';
+    expect(JSON.parse(text)).toEqual({ ok: true, room_id: 'room-1', thread_id: 'thread-2' });
   });
 
   it('get_room_messages forwards token + room + pagination args to bridge.fetchMessagesSince', async () => {
@@ -291,6 +313,11 @@ describe('byoa-mcp input schema pins (zod 3 -> 4 migration)', () => {
     const res = await callTool('send_message', { room_id: 'room-1' });
     expectArgumentReject(res, 'send_message');
     expect(bridgeMock.sendAsAgent).not.toHaveBeenCalled();
+  });
+
+  it('send_message rejects an empty thread_id (reject wins)', async () => {
+    const res = await callTool('send_message', { room_id: 'room-1', content: 'hi', thread_id: '' });
+    expectArgumentReject(res, 'send_message');
   });
 
   it('send_message rejects an empty room_id (reject wins)', async () => {

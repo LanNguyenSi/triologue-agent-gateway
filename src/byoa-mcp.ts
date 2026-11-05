@@ -153,20 +153,21 @@ function buildServerForAgent(agent: AgentInfo, token: string): McpServer {
     'send_message',
     {
       description:
-        'Send a message to a Triologue room as the authenticated agent. Goes through the same pipeline as the REST /send endpoint. Note: control strings `NO_REPLY` and `HEARTBEAT_OK` are silently filtered server-side and never posted — the tool still returns success in that case, mirroring the existing /send behaviour.',
+        'Send a message to a Triologue room as the authenticated agent. Goes through the same pipeline as the REST /send endpoint. Pass thread_id (a thread of that room, e.g. the threadId of the message you answer) to reply inside the thread; omit it for a top-level room message. Note: control strings `NO_REPLY` and `HEARTBEAT_OK` are silently filtered server-side and never posted — the tool still returns success in that case, mirroring the existing /send behaviour.',
       inputSchema: {
         room_id: z.string().min(1),
         content: z.string().min(1),
+        thread_id: z.string().min(1).optional(),
       },
     },
-    async ({ room_id, content }) => {
+    async ({ room_id, content, thread_id }) => {
       try {
-        await bridge.sendAsAgent(token, room_id, content);
+        await bridge.sendAsAgent(token, room_id, content, thread_id ?? null);
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ ok: true, room_id }, null, 2),
+              text: JSON.stringify({ ok: true, room_id, ...(thread_id ? { thread_id } : {}) }, null, 2),
             },
           ],
         };
