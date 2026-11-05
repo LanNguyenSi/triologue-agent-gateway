@@ -11,6 +11,12 @@ The gateway's HTTP endpoints, the outbound MCP server, and the WebSocket protoco
 | `/byoa/sse/status` | GET | Bearer | Agent connection info |
 | `/byoa/sse/health` | GET | - | SSE subsystem health |
 | `/byoa/sse/tokens/rotate` | POST | Bearer | Token rotation via Triologue; current token only, replaced token valid for a grace window (see [BYOA.md](../BYOA.md#token-rotation)) |
+| `/byoa/sessions/connect` | POST | Bearer | Register or refresh an agent session (see [Sessions](#sessions)) |
+| `/byoa/sessions` | GET | Bearer | The agent's live sessions |
+| `/byoa/sessions/:sessionId/heartbeat` | POST | Bearer | Keep a session alive |
+| `/byoa/sessions/:sessionId/presence` | POST | Bearer | Set a session's status |
+| `/byoa/sessions/:sessionId/bind` | POST, DELETE | Bearer | Bind or unbind rooms and threads |
+| `/byoa/sessions/:sessionId` | DELETE | Bearer | End a session |
 | `/byoa/ws` | WS | Token msg | WebSocket connection |
 | `/byoa/mcp` | POST | Bearer | MCP Streamable-HTTP (outbound tools, see below) |
 | `/agent-tasks/webhook` | POST | HMAC | Inbound agent-tasks Signal bridge (see [agent-tasks-bridge.md](agent-tasks-bridge.md)) |
@@ -59,6 +65,29 @@ Transport is stateless - each POST is an independent round-trip, no
 session ID, no reconnection state. Bearer auth is identical to the
 other BYOA endpoints; an invalid token returns 401 before any MCP
 machinery runs. GET and DELETE return 405.
+
+## Sessions
+
+A session is one running agent runtime (a Claude Code terminal, a Codex
+app-server thread, an opencode server) speaking for the agent token. Sessions
+are optional: an agent that never calls these routes behaves exactly as
+before. The registry records where a session runs, what it is doing and
+which rooms and threads it is bound to; later gateway releases use the
+bindings to route a room or thread message to the one session that owns it
+and push the status to Triologue. All routes take `Authorization: Bearer
+byoa_<token>` and are scoped to that token's agent: a session of another
+agent answers `404 Unknown session`, the same as an unknown or expired id.
+They share one rate limit of 120 calls per minute per agent, separate from
+the message limit (`429 RATE_LIMITED` with `Retry-After`).
+
+- `POST /byoa/sessions/connect`: body `{ "runtime": "claude", "host": "mac-studio-01", "cwd": "/projects/evidence-api", "project"?: "evidence-api", "claudeSessionId"?: "...", "sessionId"?: "...", "rooms"?: ["<roomId>"], "threads"?: ["<threadId>"] }`. `runtime` (max 32 characters), `host` (255) and `cwd` (1024) are required. Pass your own `sessionId` (`[A-Za-z0-9_-]{1,64}`) to refresh the same session after a reconnect: the start time and status are kept and the given `rooms` and `threads` are added to the existing bindings; without a `sessionId` the gateway mints a UUID. Answers `201 { "sessionId", "heartbeatSeconds": 30, "ttlSeconds": 90, "session": { ... } }`. A session that receives no heartbeat, presence or connect for `ttlSeconds` expires and loses its bindings; a connect with the same `sessionId` after that starts over without them.
+- `GET /byoa/sessions`: `{ "sessions": [ { "sessionId", "agentId", "runtime", "host", "cwd", "project", "claudeSessionId", "status", "detail", "startedAt", "lastHeartbeat", "rooms": [], "threads": [] } ] }`, expired sessions already pruned.
+- `POST /byoa/sessions/:sessionId/heartbeat`: `204`; extends the TTL.
+- `POST /byoa/sessions/:sessionId/presence`: body `{ "status": "online" | "working" | "waiting_approval" | "error" | "offline", "detail"?: "up to 500 characters" }`; `204`. Counts as a heartbeat. `offline` ends the session like `DELETE`.
+- `POST /byoa/sessions/:sessionId/bind` and `DELETE /byoa/sessions/:sessionId/bind`: body `{ "rooms"?: ["<roomId>"], "threads"?: ["<threadId>"] }` (at most 50 each per call, ids matching `[A-Za-z0-9_-]{1,128}`); answer `200 { "rooms": [...], "threads": [...] }` with the session's bindings after the change. One session holds at most 200 bindings; a bind beyond that answers `400`.
+- `DELETE /byoa/sessions/:sessionId`: `204`; a second call answers `404`.
+
+Validation failures answer `400 { "error": "..." }`; a failure of the session store answers `500 { "error": "Session store unavailable" }`, which a client treats like a lost heartbeat and retries.
 
 ## WebSocket Protocol
 

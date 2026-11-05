@@ -21,6 +21,7 @@ import type { TriologueBridge } from './triologue-bridge.js';
 
 // Use existing auth system
 import { authenticateToken, authenticateCurrentToken, rotateTokenUpstream } from './auth.js';
+import { consumeWindow } from './rate-window.js';
 import { parseThreadId } from './thread-id.js';
 
 // ── Bridge reference (injected from index.ts) ──
@@ -332,34 +333,6 @@ sseRouter.get('/health', (_, res) => {
 function formatSSE(id: number, event: string, data: any): string {
   const idLine = id > 0 ? `id: ${id}\n` : '';
   return `${idLine}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-}
-
-/**
- * Sliding-window counter shared by the message and rotate limiters. Records
- * the call when allowed; when not, reports the seconds until the oldest
- * entry leaves the window (never less than 1 second).
- */
-function consumeWindow(
-  store: Map<string, number[]>,
-  key: string,
-  now: number,
-  windowMs: number,
-  maxRequests: number,
-): { allowed: boolean; retryAfter: number; remaining: number } {
-  if (!store.has(key)) store.set(key, []);
-  const timestamps = store.get(key)!;
-
-  // Remove old entries
-  while (timestamps.length > 0 && timestamps[0] < now - windowMs) {
-    timestamps.shift();
-  }
-
-  if (timestamps.length >= maxRequests) {
-    return { allowed: false, retryAfter: Math.max(1, Math.ceil((timestamps[0] + windowMs - now) / 1000)), remaining: 0 };
-  }
-
-  timestamps.push(now);
-  return { allowed: true, retryAfter: 0, remaining: maxRequests - timestamps.length };
 }
 
 function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {

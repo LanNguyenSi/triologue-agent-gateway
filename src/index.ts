@@ -18,6 +18,8 @@ import { loadAgents, buildTokenIndex, authenticateToken, getWebhookAgents, getAg
 import { dispatchWebhook } from './webhook-dispatch.js';
 import { TriologueBridge } from './triologue-bridge.js';
 import { shouldDeliver, isMentioned } from './loop-guard.js';
+import { Redis } from 'ioredis';
+import { SessionRegistry, createSessionsRouter, SWEEP_INTERVAL_MS } from './sessions.js';
 import { parseThreadId } from './thread-id.js';
 import { injectToSession } from './openclaw-inject.js';
 import { openClawReplyHint } from './openclaw-paths.js';
@@ -81,6 +83,14 @@ app.use('/byoa/sse', sseRouter);
 // Mount MCP Streamable-HTTP endpoint (outbound only — see byoa-mcp.ts
 // for the scope-vs-inbound rationale).
 app.use('/byoa/mcp', mcpRouter);
+
+// Agent sessions: a Redis-backed registry of running agent runtimes (host,
+// cwd, status, bound rooms and threads) behind /byoa/sessions. Its own Redis
+// client, like the two in byoa-sse.ts; expired sessions are swept in start().
+const sessionRedis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+sessionRedis.on('error', (err: Error) => console.error(`[sessions] redis error: ${err.message}`));
+export const sessionRegistry = new SessionRegistry(sessionRedis);
+app.use('/byoa/sessions', createSessionsRouter(sessionRegistry));
 
 const server = createServer(app);
 
@@ -681,13 +691,23 @@ async function start(): Promise<void> {
     metrics.updateAgentCounts(wsAgents, webhookAgents);
   }, 30_000);
 
+  // Drop sessions whose heartbeat stopped (their Redis hash expired) and
+  // the room and thread bindings they left behind.
+  const sweepTimer = setInterval(() => {
+    sessionRegistry.sweep().then((n) => {
+      if (n > 0) console.log(`[sessions] swept ${n} expired session(s)`);
+    }).catch((err: Error) => console.error(`[sessions] sweep failed: ${err.message}`));
+  }, SWEEP_INTERVAL_MS);
+
   // Graceful shutdown
   const shutdown = () => {
     console.log('Shutting down...');
+    clearInterval(sweepTimer);
     stopSync();
     bridge.disconnect();
     metrics.shutdown();
     shutdownSSE();
+    sessionRedis.disconnect();
     for (const [, c] of clients) c.ws.close(1001, 'Server shutting down');
     server.close();
     process.exit(0);

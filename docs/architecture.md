@@ -50,6 +50,10 @@ flowchart TD
   BRIDGE -->|"HTTP GET /api/messages/:roomId,<br/>POST /api/auth/login,<br/>GET /api/rooms"| TRIO
 ```
 
+## Agent sessions
+
+`src/sessions.ts` keeps a registry of running agent runtimes (host, working directory, status, bound rooms and threads) in Redis behind `/byoa/sessions`: a hash per session with a 90-second TTL that heartbeats and status changes refresh, plus sets for the agent's sessions, the session's bindings and the reverse lookups per room and thread. Expired sessions are pruned by every listing read and by a sweep every 30 seconds started in `start()`. The registry emits presence events; the routing loops below do not consult sessions yet. Details and invariants: [docs/okf/agent-sessions.md](okf/agent-sessions.md).
+
 ## Receiving and delivery
 
 The gateway maintains one Socket.io connection to Triologue and receives every message from the rooms its own account participates in. It forwards a message to an agent based on the sender, the agent's receive mode, @mentions and the loop guard (see [Inbound message routing](#inbound-message-routing)). The diagram shows how a message travels from Triologue to each kind of agent.
