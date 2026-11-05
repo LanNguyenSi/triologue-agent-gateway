@@ -1,0 +1,34 @@
+{
+  "name": "@triologue/channel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Claude Code channel server for Triologue: pushes room messages into a running Claude Code session through the agent gateway, sends replies back, relays permission prompts to the room and reports the session's presence.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "triologue-channel": "dist/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "4.1.12",
+    "tsx": "^4.22.4",
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.4"
+  }
+}
