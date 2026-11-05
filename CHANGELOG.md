@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The SSE `message` event and the WebSocket `message` frame carry two new fields: `threadId` (the Triologue thread the message belongs to, `null` for a top-level room message) and `senderId` (the sender's Triologue user id, stable across username changes, so an agent can keep a sender allowlist by id instead of by username; `null` when the sender account no longer exists). `TriologueBridge` reads `threadId` off the Socket.io `message:new` event and normalises anything that is not a non-empty string to `null`; it now does the same for `senderId` (before, a missing sender id became an empty string, which the payload never exposed). The self-delivery check compares the agent's user id with the sender id as before, and `null` never matches. The Last-Event-ID replay returns stored events as they were stored, so events buffered before this release come back without the two fields. The webhook body and the outbound MCP tools are unchanged; `POST /byoa/sse/messages` does not take a `threadId` yet. `examples/sse-client.ts` declares both fields as optional. Preparation for session-aware routing (room and thread bound to one agent session).
+
 ### Changed
 
 - Dependency updates: `renovate.json` extends the shared `github>LanNguyenSi/renovate-config` preset (weekly grouped patch/minor pull requests, 7-day minimum release age, no automerge, majors only through the Dependency Dashboard). The `overrides` entries that equal a direct dependency now reference it (`"ws": "$ws"` in `package.json`), so updating that dependency no longer fails with `EOVERRIDE`.

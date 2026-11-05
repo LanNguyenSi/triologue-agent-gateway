@@ -41,7 +41,11 @@ interface IncomingMessage {
   id: string;
   room: string;
   roomName: string;
+  /** Thread id, null for a top-level room message; absent on gateways older than the release that added it (see CHANGELOG). */
+  threadId?: string | null;
   sender: string;
+  /** Sender's Triologue user id, null when the sender account no longer exists; absent on older gateways. */
+  senderId?: string | null;
   senderType: "HUMAN" | "AI";
   content: string;
   timestamp: string;

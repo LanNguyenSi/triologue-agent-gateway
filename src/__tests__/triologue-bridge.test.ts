@@ -322,6 +322,85 @@ describe('connect() - JWT cache / authenticate()', () => {
   });
 });
 
+// ── message:new normalisation ────────────────────────────────────────────────
+
+describe('message:new normalisation', () => {
+  async function connectedBridge() {
+    axiosMocks.post.mockResolvedValue({ data: { token: makeJwt(3600) } });
+    fsMocks.existsSync.mockReturnValue(false);
+    const bridge = makeBridge();
+    const connectPromise = bridge.connect();
+    await vi.waitFor(() => expect(MockSocket.instances.length).toBe(1));
+    MockSocket.instances[0].connected = true;
+    MockSocket.instances[0].emit('connect');
+    await connectPromise;
+    return { bridge, socket: MockSocket.instances[0] };
+  }
+
+  const raw = {
+    id: 'm1',
+    content: 'hello',
+    senderId: 'user-1',
+    sender: { id: 'user-1', username: 'alice', userType: 'HUMAN' },
+    roomId: 'room-1',
+    createdAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  it('passes a string threadId through and keeps senderId', async () => {
+    const { bridge, socket } = await connectedBridge();
+    const cb = vi.fn();
+    bridge.onMessage(cb);
+
+    socket.emit('message:new', { ...raw, threadId: 'thread-9' });
+
+    expect(cb).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'm1', threadId: 'thread-9', senderId: 'user-1', senderUsername: 'alice', senderType: 'human',
+    }));
+  });
+
+  it.each([
+    ['null', null],
+    ['absent', undefined],
+    ['empty string', ''],
+    ['non-string', 42],
+  ])('normalises a %s threadId to null', async (_label, threadId) => {
+    const { bridge, socket } = await connectedBridge();
+    const cb = vi.fn();
+    bridge.onMessage(cb);
+
+    socket.emit('message:new', threadId === undefined ? raw : { ...raw, threadId });
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb.mock.calls[0][0].threadId).toBeNull();
+  });
+
+  it('falls back to the sender object id when the event has no senderId', async () => {
+    const { bridge, socket } = await connectedBridge();
+    const cb = vi.fn();
+    bridge.onMessage(cb);
+
+    const { senderId: _dropped, ...withoutSenderId } = raw;
+    socket.emit('message:new', withoutSenderId);
+
+    expect(cb.mock.calls[0][0].senderId).toBe('user-1');
+  });
+
+  it.each([
+    ['null senderId and no sender object (deleted sender)', { senderId: null, sender: 'alice' }],
+    ['empty senderId and sender object without id', { senderId: '', sender: { username: 'alice', userType: 'HUMAN' } }],
+  ])('normalises %s to senderId null, never an empty string', async (_label, overrides) => {
+    const { bridge, socket } = await connectedBridge();
+    const cb = vi.fn();
+    bridge.onMessage(cb);
+
+    socket.emit('message:new', { ...raw, ...overrides });
+
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb.mock.calls[0][0].senderId).toBeNull();
+    expect(cb.mock.calls[0][0].senderUsername).toBe('alice');
+  });
+});
+
 // ── reconnect backoff (M9) ───────────────────────────────────────────────────
 
 describe('reconnect scheduling', () => {

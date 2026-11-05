@@ -219,27 +219,30 @@ describe('webhook loop-guard window starts only on a delivery', () => {
   });
 });
 
-describe('webhook window is not started for an agent already served over WebSocket', () => {
-  /** Register a WS client through the real auth handler; returns a closer. */
-  async function connectWs(agent: AgentInfo): Promise<() => void> {
-    mocks.authenticate.mockReturnValue(agent);
-    const handlers: Record<string, (...a: unknown[]) => unknown> = {};
-    const ws = {
-      readyState: 1,
-      send: vi.fn(),
-      close: vi.fn(),
-      on: (ev: string, cb: (...a: unknown[]) => unknown) => { handlers[ev] = cb; },
-    };
-    mocks.wsConnection!(ws);
-    await handlers.message(Buffer.from(JSON.stringify({ type: 'auth', token: 'tok' })));
-    expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('auth_ok'));
-    return () => { handlers.close(1000, 'test'); };
-  }
+/**
+ * Register a WS client through the real auth handler. Returns the fake
+ * socket (so a test can inspect the frames written to it) and a closer.
+ */
+async function connectWs(agent: AgentInfo): Promise<{ ws: { send: ReturnType<typeof vi.fn> }; disconnect: () => void }> {
+  mocks.authenticate.mockReturnValue(agent);
+  const handlers: Record<string, (...a: unknown[]) => unknown> = {};
+  const ws = {
+    readyState: 1,
+    send: vi.fn(),
+    close: vi.fn(),
+    on: (ev: string, cb: (...a: unknown[]) => unknown) => { handlers[ev] = cb; },
+  };
+  mocks.wsConnection!(ws);
+  await handlers.message(Buffer.from(JSON.stringify({ type: 'auth', token: 'tok' })));
+  expect(ws.send).toHaveBeenCalledWith(expect.stringContaining('auth_ok'));
+  return { ws, disconnect: () => { handlers.close(1000, 'test'); } };
+}
 
+describe('webhook window is not started for an agent already served over WebSocket', () => {
   it('an AI @mention while connected is not dispatched by the webhook loop and does not start the window', async () => {
     const agent = webhookAgent({ mentionKey: 'wskey', username: 'wsuser' });
     mocks.webhookAgents = [agent];
-    const disconnect = await connectWs(agent);
+    const { disconnect } = await connectWs(agent);
 
     await handler(message({ content: '@wskey while connected' }));
     expect(mocks.dispatchWebhook).not.toHaveBeenCalled();
@@ -248,5 +251,79 @@ describe('webhook window is not started for an agent already served over WebSock
 
     await handler(message({ content: '@wskey after disconnect' }));
     expect(mocks.dispatchWebhook).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('thread and sender identity are passed through to the agent payloads', () => {
+  // The bridge normalises threadId to a string or null before the handler
+  // runs (see triologue-bridge.test.ts); here the handler is driven directly,
+  // so the tests pass both shapes in and check they reach the payload as is.
+
+  it('SSE fanout carries threadId and senderId', async () => {
+    const agent = webhookAgent({ mentionKey: 'thrkey', username: 'thruser', receiveMode: 'mentions' });
+    mocks.allAgents = [agent];
+    mocks.hasSSE.mockReturnValue(true);
+
+    await handler(message({
+      senderType: 'human', senderUsername: 'human1', senderId: 'user-h1',
+      content: '@thrkey in thread', threadId: 'thread-42',
+    }));
+
+    expect(mocks.fanout).toHaveBeenCalledTimes(1);
+    expect(mocks.fanout).toHaveBeenCalledWith(agent.userId, expect.objectContaining({
+      threadId: 'thread-42',
+      senderId: 'user-h1',
+      sender: 'human1',
+      senderType: 'HUMAN',
+    }));
+  });
+
+  it('SSE fanout carries threadId null for a top-level room message', async () => {
+    const agent = webhookAgent({ mentionKey: 'topkey', username: 'topuser', receiveMode: 'mentions' });
+    mocks.allAgents = [agent];
+    mocks.hasSSE.mockReturnValue(true);
+
+    await handler(message({ senderType: 'human', senderUsername: 'human1', content: '@topkey top level', threadId: null }));
+
+    const [, payload] = mocks.fanout.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload.threadId).toBeNull();
+    expect(payload.senderId).toBe('sender-1');
+  });
+
+  it('WebSocket message frame carries threadId and senderId', async () => {
+    const agent = webhookAgent({ mentionKey: 'wsthr', username: 'wsthruser', receiveMode: 'mentions' });
+    const { ws, disconnect } = await connectWs(agent);
+
+    await handler(message({
+      senderType: 'human', senderUsername: 'human1', senderId: 'user-h1',
+      content: '@wsthr in thread', threadId: 'thread-7',
+    }));
+
+    const frames = ws.send.mock.calls
+      .map(([raw]) => JSON.parse(raw as string) as Record<string, unknown>)
+      .filter((f) => f.type === 'message');
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ threadId: 'thread-7', senderId: 'user-h1', sender: 'human1' });
+
+    disconnect();
+  });
+
+  it('WebSocket message frame carries threadId null and senderId null for a top-level message from a deleted sender', async () => {
+    const agent = webhookAgent({ mentionKey: 'wsnull', username: 'wsnulluser', receiveMode: 'mentions' });
+    const { ws, disconnect } = await connectWs(agent);
+
+    await handler(message({
+      senderType: 'human', senderUsername: 'human1', senderId: null,
+      content: '@wsnull top level', threadId: null,
+    }));
+
+    const frames = ws.send.mock.calls
+      .map(([raw]) => JSON.parse(raw as string) as Record<string, unknown>)
+      .filter((f) => f.type === 'message');
+    expect(frames).toHaveLength(1);
+    expect(frames[0].threadId).toBeNull();
+    expect(frames[0].senderId).toBeNull();
+
+    disconnect();
   });
 });

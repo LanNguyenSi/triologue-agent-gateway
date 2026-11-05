@@ -48,7 +48,9 @@ interface AgentMessage {
   id: string;
   room: string;
   roomName: string;
+  threadId: string | null;
   sender: string;
+  senderId: string | null;
   senderType: 'HUMAN' | 'AI';
   content: string;
   timestamp: string;

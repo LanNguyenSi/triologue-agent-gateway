@@ -288,7 +288,9 @@ describe('fanoutToSSEClient', () => {
       id: 'msg-001',
       room: 'room-1',
       roomName: 'General',
+      threadId: null,
       sender: 'humanuser',
+      senderId: 'user-human',
       senderType: 'HUMAN' as const,
       content: 'Hello SSEBot!',
       timestamp: new Date().toISOString(),
@@ -304,6 +306,9 @@ describe('fanoutToSSEClient', () => {
     expect(allData).toContain('msg-001');
     expect(allData).toContain('Hello SSEBot!');
     expect(allData).toContain('humanuser');
+    // The two routing fields reach the wire as written, not only the mock.
+    expect(allData).toContain('"threadId":null');
+    expect(allData).toContain('"senderId":"user-human"');
 
     destroy();
     await waitFor(() => !hasSSEClient(fakeAgent.userId));
@@ -325,7 +330,9 @@ describe('fanoutToSSEClient', () => {
       id: 'msg-targeted',
       room: 'room-2',
       roomName: 'Test',
+      threadId: null,
       sender: 'sender',
+      senderId: 'user-sender',
       senderType: 'HUMAN',
       content: 'OnlyForAgent1',
       timestamp: new Date().toISOString(),
@@ -354,7 +361,9 @@ describe('fanoutToSSEClient', () => {
         id: 'msg-none',
         room: 'r',
         roomName: 'r',
+        threadId: null,
         sender: 's',
+        senderId: 'u',
         senderType: 'HUMAN',
         content: 'noop',
         timestamp: new Date().toISOString(),
