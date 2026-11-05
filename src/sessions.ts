@@ -58,7 +58,6 @@ export interface SessionStore {
   sadd(key: string, ...members: string[]): Promise<number>;
   srem(key: string, ...members: string[]): Promise<number>;
   smembers(key: string): Promise<string[]>;
-  scard(key: string): Promise<number>;
   del(...keys: string[]): Promise<number>;
   exists(...keys: string[]): Promise<number>;
   multi(): SessionPipeline;
@@ -284,6 +283,11 @@ export class SessionRegistry extends EventEmitter {
     return sessions;
   }
 
+  /** Every agent that has or had a session (the sweep's and the presence push's scope). */
+  async agents(): Promise<string[]> {
+    return (await this.store.smembers(AGENTS_KEY)).sort();
+  }
+
   /** Live sessions of the agent bound to the room (expired ones pruned). */
   async sessionsForRoom(agentId: string, roomId: string): Promise<string[]> {
     return this.liveMembers(agentId, roomBindKey(roomId, agentId));
@@ -301,7 +305,7 @@ export class SessionRegistry extends EventEmitter {
    */
   async sweep(): Promise<number> {
     let expired = 0;
-    for (const agentId of await this.store.smembers(AGENTS_KEY)) {
+    for (const agentId of await this.agents()) {
       for (const sessionId of await this.store.smembers(sessionsKey(agentId))) {
         if (!(await this.store.exists(sessionKey(agentId, sessionId)))) {
           if (await this.expire(agentId, sessionId)) expired += 1;
@@ -377,7 +381,7 @@ function isStatus(value: unknown): value is SessionStatus {
 
 // ── HTTP API ──
 
-const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+export const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const BINDING_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_BINDINGS_PER_CALL = 50;
 const WINDOW_MS = 60_000;

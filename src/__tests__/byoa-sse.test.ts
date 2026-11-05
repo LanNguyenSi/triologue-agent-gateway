@@ -98,7 +98,9 @@ const {
   sseRouter,
   hasSSEClient,
   getSSEClientAgentIds,
+  getSSESessionIds,
   fanoutToSSEClient,
+  selectReplayEvents,
   shutdownSSE,
 } = await import('../byoa-sse.js');
 
@@ -174,10 +176,11 @@ afterEach(() => {
  * destroy() function to close the client side (triggering the server's
  * 'close' event cleanup).
  */
-function connectSSE(token: string): Promise<{
+function connectSSE(token: string, query = ''): Promise<{
   chunks: string[];
   destroy: () => void;
   req: http.ClientRequest;
+  status: number;
 }> {
   return new Promise((resolve, reject) => {
     const chunks: string[] = [];
@@ -185,13 +188,13 @@ function connectSSE(token: string): Promise<{
       {
         hostname: '127.0.0.1',
         port,
-        path: '/byoa/sse/stream',
+        path: `/byoa/sse/stream${query}`,
         headers: { Authorization: `Bearer ${token}` },
       },
       (res) => {
         res.setEncoding('utf8');
         res.on('data', (chunk: string) => chunks.push(chunk));
-        resolve({ chunks, destroy: () => req.destroy(), req });
+        resolve({ chunks, destroy: () => req.destroy(), req, status: res.statusCode ?? 0 });
       },
     );
     req.on('error', (err: NodeJS.ErrnoException) => {
@@ -368,7 +371,97 @@ describe('fanoutToSSEClient', () => {
         content: 'noop',
         timestamp: new Date().toISOString(),
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeNull();
+  });
+});
+
+describe('session-tagged streams', () => {
+  const sessionAgent: AgentInfo = { ...fakeAgent, id: 'user-sse-session', userId: 'user-sse-session' };
+
+  it('limits streams per session, not per agent, and refuses a malformed session id', async () => {
+    authenticateTokenMock.mockReturnValue(sessionAgent);
+    const a = await connectSSE('t', '?session=s1');
+    const b = await connectSSE('t', '?session=s1');
+    await waitFor(() => b.chunks.some((c) => c.includes('connected')));
+    const third = await connectSSE('t', '?session=s1');
+    await waitFor(() => third.chunks.some((c) => c.includes('TOO_MANY_CONNECTIONS')));
+    expect(third.chunks.join('')).toContain('per session');
+
+    // A different session of the same agent is not counted against s1.
+    const other = await connectSSE('t', '?session=s2');
+    await waitFor(() => other.chunks.some((c) => c.includes('connected')));
+    expect(getSSESessionIds(sessionAgent.userId).sort()).toEqual(['s1', 's2']);
+
+    const bad = await connectSSE('t', '?session=has%20space');
+    expect(bad.status).toBe(400);
+
+    a.destroy(); b.destroy(); other.destroy();
+    await waitFor(() => !hasSSEClient(sessionAgent.userId));
+  });
+
+  it('caps the streams of one agent at 10 whatever the session labels say', async () => {
+    const capped: AgentInfo = { ...fakeAgent, id: 'user-sse-cap', userId: 'user-sse-cap' };
+    authenticateTokenMock.mockReturnValue(capped);
+    const open: Array<{ destroy: () => void; chunks: string[] }> = [];
+    for (let i = 0; i < 10; i++) {
+      const s = await connectSSE('t', `?session=label-${i}`);
+      await waitFor(() => s.chunks.some((c) => c.includes('connected')));
+      open.push(s);
+    }
+
+    const eleventh = await connectSSE('t', '?session=label-10');
+    await waitFor(() => eleventh.chunks.some((c) => c.includes('TOO_MANY_CONNECTIONS')));
+    expect(eleventh.chunks.join('')).toContain('per agent');
+
+    for (const s of open) s.destroy();
+    await waitFor(() => !hasSSEClient(capped.userId));
+  });
+
+  it('fanout with targets reaches only the targeted session, and falls back to every stream when none is open', async () => {
+    authenticateTokenMock.mockReturnValue(sessionAgent);
+    const tagged = await connectSSE('t', '?session=s1');
+    const untagged = await connectSSE('t');
+    await waitFor(() => untagged.chunks.some((c) => c.includes('connected')) && tagged.chunks.some((c) => c.includes('connected')));
+    const message = (content: string) => ({
+      id: `m-${content}`, room: 'room-1', roomName: 'R', threadId: null, sender: 'h', senderId: 'u-h', senderType: 'HUMAN' as const, content, timestamp: new Date().toISOString(),
+    });
+
+    // MUTATION GUARD: delivering to every stream regardless of targets puts
+    // 'OnlyS1' on the untagged stream; fails.
+    expect(await fanoutToSSEClient(sessionAgent.userId, message('OnlyS1'), ['s1'])).toEqual(['s1']);
+    await waitFor(() => tagged.chunks.some((c) => c.includes('OnlyS1')));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(untagged.chunks.join('')).not.toContain('OnlyS1');
+
+    // A targeted session without a stream is still a target: the event is
+    // written to s1 now and replayed to s2 when it reconnects.
+    expect(await fanoutToSSEClient(sessionAgent.userId, message('BothTargets'), ['s1', 's2'])).toEqual(['s1', 's2']);
+    await waitFor(() => tagged.chunks.some((c) => c.includes('BothTargets')));
+
+    // No open stream for s9: everyone gets it, and it is stored untargeted.
+    expect(await fanoutToSSEClient(sessionAgent.userId, message('Fallback'), ['s9'])).toBeNull();
+    await waitFor(() => tagged.chunks.some((c) => c.includes('Fallback')) && untagged.chunks.some((c) => c.includes('Fallback')));
+
+    tagged.destroy(); untagged.destroy();
+    await waitFor(() => !hasSSEClient(sessionAgent.userId));
+  });
+});
+
+describe('selectReplayEvents', () => {
+  const stored = (eventId: number, targets?: string[]) =>
+    JSON.stringify({ id: `m${eventId}`, content: `c${eventId}`, eventId, ...(targets ? { targets } : {}) });
+
+  it('replays untargeted events to every stream and targeted ones only to their sessions', () => {
+    const entries = [stored(3, ['s1']), stored(1), stored(2, ['s2']), 'not json', JSON.stringify({ id: 'x' })];
+
+    expect(selectReplayEvents(entries, null).map((e) => e.eventId)).toEqual([1]);
+    expect(selectReplayEvents(entries, 's1').map((e) => e.eventId)).toEqual([1, 3]);
+    expect(selectReplayEvents(entries, 's2').map((e) => e.eventId)).toEqual([1, 2]);
+    // The targets list is bookkeeping, never part of the event an agent sees.
+    expect(selectReplayEvents(entries, 's1').map((e) => e.event)).toEqual([
+      { id: 'm1', content: 'c1', eventId: 1 },
+      { id: 'm3', content: 'c3', eventId: 3 },
+    ]);
   });
 });
 

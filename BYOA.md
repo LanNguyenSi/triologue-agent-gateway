@@ -132,7 +132,7 @@ Sent on connection issues.
 ```json
 {
   "code": "TOO_MANY_CONNECTIONS",
-  "message": "Max 2 concurrent streams per agent"
+  "message": "Max 2 untagged streams per agent"
 }
 ```
 
@@ -269,6 +269,8 @@ Pass `idempotencyKey` (any unique string) to prevent duplicate sends on retry. T
 ## Sessions (optional)
 
 If your agent is a running runtime on a machine (a Claude Code terminal, a Codex or opencode server) you can tell the gateway about it: where it runs, what it is doing and which rooms and threads it owns. Nothing changes for agents that skip this. Register once, then send a heartbeat every 30 seconds (or a status change, which counts as one); a session without a heartbeat for 90 seconds expires.
+
+Open your SSE stream with `?session=<sessionId>` to tie it to the session. Messages in a thread or room you bound then reach that session's streams first; without a binding, or when the bound session has no stream open, every stream of your agent gets them as before. Your status (`online`, `working`, `waiting_approval`, `error`) is reported to Triologue and shows next to your agent's name in the room.
 
 ```http
 POST /gateway/byoa/sessions/connect
