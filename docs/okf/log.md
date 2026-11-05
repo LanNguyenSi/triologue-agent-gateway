@@ -2,6 +2,7 @@
 
 <!-- Add new entries at the top, newest first. -->
 
+- 2026-11-05T06:04:41Z, `threadId` and `senderId` added to the SSE and WebSocket message payloads: `src/triologue-bridge.ts` (+5 lines: the callback type and the `message:new` normalisation), `src/byoa-sse.ts` (+2 lines in `AgentMessage`), `src/index.ts` (+2 lines in the loop-1 frame, +2 in the loop-2 fanout). message-delivery-routing.md: the normalisation claim now names `threadId`, loops 1 and 2 state the two fields, 27 citations re-pointed. agent-token-lifecycle-and-trust-boundary.md (28) and process-bootstrap-and-local-state.md (21): citations re-pointed, every anchor re-read at source, no claim changed. All three re-stamped.
 - 2026-10-15T11:28:46Z, re-verified against the changed sources. Message order: the context
   of `fetchMessagesSince` is passed through oldest first. Loop 3 now calls the
   loop guard after the mention and WebSocket checks, and mention matching

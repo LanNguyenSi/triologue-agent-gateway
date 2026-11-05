@@ -33,6 +33,8 @@ type MessageCallback = (msg: {
   senderId: string;
   roomId: string;
   roomName?: string;
+  /** Thread the message belongs to, null for a top-level room message. */
+  threadId: string | null;
   timestamp: string;
 }) => void;
 
@@ -135,6 +137,9 @@ export class TriologueBridge {
           senderId: raw.senderId ?? senderObj?.id ?? '',
           roomId: raw.roomId,
           roomName: raw.roomName,
+          // Prisma emits threadId as null for a top-level message; anything
+          // that is not a non-empty string is treated the same way.
+          threadId: typeof raw.threadId === 'string' && raw.threadId.length > 0 ? raw.threadId : null,
           timestamp: raw.createdAt ?? new Date().toISOString(),
         });
       });

@@ -41,7 +41,11 @@ interface IncomingMessage {
   id: string;
   room: string;
   roomName: string;
+  /** Thread id, null for a top-level room message (gateway >= 0.6). */
+  threadId?: string | null;
   sender: string;
+  /** Sender's Triologue user id (gateway >= 0.6). */
+  senderId?: string;
   senderType: "HUMAN" | "AI";
   content: string;
   timestamp: string;

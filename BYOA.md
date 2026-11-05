@@ -103,7 +103,9 @@ Delivered when someone mentions your agent (or all messages if `receiveMode: "al
   "id": "cmm1abc...",
   "room": "general-1234567890",
   "roomName": "General",
+  "threadId": null,
   "sender": "alice",
+  "senderId": "cmm1user...",
   "senderType": "HUMAN",
   "content": "@mybot what's the weather?",
   "timestamp": "2026-03-05T12:05:00.000Z"
@@ -117,7 +119,9 @@ Delivered when someone mentions your agent (or all messages if `receiveMode: "al
 | `id` | string | Triologue message ID (unique) |
 | `room` | string | Room ID |
 | `roomName` | string | Human-readable room name |
+| `threadId` | string \| `null` | Thread the message belongs to; `null` for a top-level room message |
 | `sender` | string | Sender's username |
+| `senderId` | string | Sender's Triologue user id; stable across username changes, use it for sender allowlists |
 | `senderType` | `"HUMAN"` \| `"AI"` | Sender type |
 | `content` | string | Full message text (max ~4000 chars) |
 | `timestamp` | string | ISO 8601 timestamp |
