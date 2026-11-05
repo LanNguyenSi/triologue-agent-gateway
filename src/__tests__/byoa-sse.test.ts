@@ -399,6 +399,24 @@ describe('session-tagged streams', () => {
     await waitFor(() => !hasSSEClient(sessionAgent.userId));
   });
 
+  it('caps the streams of one agent at 10 whatever the session labels say', async () => {
+    const capped: AgentInfo = { ...fakeAgent, id: 'user-sse-cap', userId: 'user-sse-cap' };
+    authenticateTokenMock.mockReturnValue(capped);
+    const open: Array<{ destroy: () => void; chunks: string[] }> = [];
+    for (let i = 0; i < 10; i++) {
+      const s = await connectSSE('t', `?session=label-${i}`);
+      await waitFor(() => s.chunks.some((c) => c.includes('connected')));
+      open.push(s);
+    }
+
+    const eleventh = await connectSSE('t', '?session=label-10');
+    await waitFor(() => eleventh.chunks.some((c) => c.includes('TOO_MANY_CONNECTIONS')));
+    expect(eleventh.chunks.join('')).toContain('per agent');
+
+    for (const s of open) s.destroy();
+    await waitFor(() => !hasSSEClient(capped.userId));
+  });
+
   it('fanout with targets reaches only the targeted session, and falls back to every stream when none is open', async () => {
     authenticateTokenMock.mockReturnValue(sessionAgent);
     const tagged = await connectSSE('t', '?session=s1');
@@ -414,6 +432,11 @@ describe('session-tagged streams', () => {
     await waitFor(() => tagged.chunks.some((c) => c.includes('OnlyS1')));
     await new Promise((r) => setTimeout(r, 50));
     expect(untagged.chunks.join('')).not.toContain('OnlyS1');
+
+    // A targeted session without a stream is still a target: the event is
+    // written to s1 now and replayed to s2 when it reconnects.
+    expect(await fanoutToSSEClient(sessionAgent.userId, message('BothTargets'), ['s1', 's2'])).toEqual(['s1', 's2']);
+    await waitFor(() => tagged.chunks.some((c) => c.includes('BothTargets')));
 
     // No open stream for s9: everyone gets it, and it is stored untargeted.
     expect(await fanoutToSSEClient(sessionAgent.userId, message('Fallback'), ['s9'])).toBeNull();

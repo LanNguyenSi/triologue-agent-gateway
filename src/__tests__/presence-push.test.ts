@@ -100,11 +100,17 @@ describe('PresencePusher', () => {
     expect(post).toHaveBeenCalledTimes(3);
   });
 
-  it('skips agents without a current token and logs it', async () => {
+  it('skips agents without a current token, logs it once per state, and never posts for them', async () => {
     registry.sessions.set('agent-x', [session({ agentId: 'agent-x' })]);
     await pusher.push('agent-x');
     expect(post).not.toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining('agent-x'));
+
+    // Gone for good: the offline state is remembered, so refreshes stay quiet.
+    registry.sessions.set('agent-x', []);
+    await pusher.refreshAll();
+    await pusher.refreshAll();
+    expect(log.mock.calls.filter(([m]) => String(m).includes('agent-x'))).toHaveLength(2);
   });
 
   it('refreshAll re-posts every agent the registry knows, and a failed post is logged, not thrown', async () => {
@@ -119,6 +125,33 @@ describe('PresencePusher', () => {
     // The failure is not remembered as pushed: the next refresh tries again.
     await pusher.refreshAll();
     expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it('a change during an in-flight post is pushed again afterwards, from fresh state', async () => {
+    registry.sessions.set('agent-a', [session({ status: 'working' })]);
+    let release!: () => void;
+    post.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+
+    const first = pusher.push('agent-a');
+    await vi.waitFor(() => expect(post).toHaveBeenCalledTimes(1));
+    // The state changes while the first post is still on the wire.
+    registry.sessions.set('agent-a', [session({ status: 'waiting_approval', detail: 'Bash' })]);
+    const second = pusher.push('agent-a');
+    release();
+    await Promise.all([first, second]);
+
+    // MUTATION GUARD: coalescing the second call into the stale attempt
+    // leaves one post with 'working'; fails.
+    expect(post.mock.calls.map(([, body]) => (body as { status: string }).status)).toEqual(['working', 'waiting_approval']);
+  });
+
+  it('refreshAll folds a pending debounced push into its own', async () => {
+    registry.sessions.set('agent-a', [session({})]);
+    registry.emit('presence', { agentId: 'agent-a' });
+    await pusher.refreshAll();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(post).toHaveBeenCalledTimes(1);
   });
 
   it('stop() drops pending timers and stops listening', async () => {

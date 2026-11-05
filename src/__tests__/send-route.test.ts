@@ -83,6 +83,7 @@ vi.mock('../auth', () => ({
   loadAgents: vi.fn(),
   buildTokenIndex: vi.fn(),
   authenticateToken: (token: string) => mocks.authenticateToken(token),
+  getCurrentTokenForAgent: () => null,
   getWebhookAgents: vi.fn().mockReturnValue([]),
   getAgentByUsername: vi.fn().mockReturnValue(null),
   getAllAgents: vi.fn().mockReturnValue([]),

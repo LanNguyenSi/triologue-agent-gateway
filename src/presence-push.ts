@@ -36,14 +36,16 @@ export function aggregatePresence(sessions: AgentSession[]): PresenceBody {
   if (sessions.length === 0) {
     return { status: 'offline', sessionId: null, host: null, project: null, detail: null, sessions: 0, ttlSeconds: PRESENCE_TTL_SECONDS };
   }
-  const best = [...sessions].sort((a, b) => RANK[b.status] - RANK[a.status] || a.lastHeartbeat.localeCompare(b.lastHeartbeat))[0];
+  // Most urgent status first; among equals the most recently heard session.
+  const best = [...sessions].sort((a, b) => RANK[b.status] - RANK[a.status] || b.lastHeartbeat.localeCompare(a.lastHeartbeat))[0];
   return {
     status: best.status,
     sessionId: best.sessionId,
     host: best.host,
     project: best.project,
     detail: best.detail,
-    sessions: sessions.length,
+    // Triologue accepts at most 100.
+    sessions: Math.min(sessions.length, 100),
     ttlSeconds: PRESENCE_TTL_SECONDS,
   };
 }
@@ -62,6 +64,8 @@ export class PresencePusher {
   private readonly timers = new Map<string, NodeJS.Timeout>();
   private readonly lastStatus = new Map<string, PresenceBody['status']>();
   private readonly inFlight = new Map<string, Promise<void>>();
+  /** Agents whose state changed while a push was in flight; pushed again after it. */
+  private readonly dirty = new Set<string>();
   private stopped = false;
   private readonly onPresence = (event: { agentId: string }) => this.schedule(event.agentId);
 
@@ -82,19 +86,40 @@ export class PresencePusher {
     this.timers.set(agentId, timer);
   }
 
-  /** Push the agent's aggregate now. Resolves when the attempt is over; never rejects. */
+  /**
+   * Push the agent's aggregate now. Resolves when the attempt is over;
+   * never rejects. A call that lands while a push is in flight marks the
+   * agent dirty, and the state is read and pushed again once the in-flight
+   * post has settled, so a change during a slow post is never lost.
+   */
   push(agentId: string): Promise<void> {
     const running = this.inFlight.get(agentId);
-    if (running) return running;
-    const attempt = this.pushNow(agentId).finally(() => this.inFlight.delete(agentId));
+    if (running) {
+      this.dirty.add(agentId);
+      return running;
+    }
+    const attempt = (async () => {
+      do {
+        this.dirty.delete(agentId);
+        await this.pushNow(agentId);
+      } while (this.dirty.has(agentId) && !this.stopped);
+    })().finally(() => this.inFlight.delete(agentId));
     this.inFlight.set(agentId, attempt);
     return attempt;
   }
 
-  /** Re-push every agent that has or had sessions, keeping Triologue's TTL alive. */
+  /**
+   * Re-push every agent that has or had sessions, keeping Triologue's TTL
+   * alive. A push pending in the debounce window is folded into this one.
+   */
   async refreshAll(): Promise<void> {
     if (this.stopped) return;
     for (const agentId of await this.deps.registry.agents()) {
+      const pending = this.timers.get(agentId);
+      if (pending) {
+        clearTimeout(pending);
+        this.timers.delete(agentId);
+      }
       await this.push(agentId);
     }
   }
@@ -112,6 +137,9 @@ export class PresencePusher {
       if (body.status === 'offline' && this.lastStatus.get(agentId) === 'offline') return;
       const token = this.deps.tokenForAgent(agentId);
       if (!token) {
+        // An agent the sync dropped: remember the state so the log line and
+        // the attempt do not repeat on every refresh.
+        this.lastStatus.set(agentId, body.status);
         this.deps.log?.(`[presence] no current token for agent ${agentId}, skipped`);
         return;
       }

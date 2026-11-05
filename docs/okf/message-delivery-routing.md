@@ -3,7 +3,7 @@ type: invariant
 title: Message delivery routing across WebSocket, SSE, webhook and openclaw-inject
 description: One inbound Triologue message runs through three loops in src/index.ts (WebSocket clients, SSE agents, webhook and openclaw-inject agents) with different filters; the loop guard ignores trust level, an @mention bypasses it on WebSocket and SSE only, WebSocket wins over SSE and webhook, SSE and webhook can both fire, the SSE loop targets the streams of the sessions bound to the message thread, else its room, and falls back to every stream, and the SSE replay buffer only holds messages fanned out while a stream was open, targeted ones for their sessions only.
 tags: [routing, delivery, loop-guard, sse, websocket, webhook, replay]
-timestamp: 2026-11-05T07:05:15Z
+timestamp: 2026-11-05T07:17:39Z
 sources:
   - src/index.ts
   - src/loop-guard.ts
@@ -19,7 +19,7 @@ sources:
 ## The invariant
 
 - Every inbound Triologue message is offered to each agent by up to three
-  independent loops in `bridge.onMessage` (`src/index.ts:138-140#"const senderIsAgent = msg.senderType === 'ai';"`),
+  independent loops in `bridge.onMessage` (`src/index.ts:143-145#"const senderIsAgent = msg.senderType === 'ai';"`),
   and the loops do not apply the same filters: which channel an agent is
   reached on, and whether it is reached at all, depends on the loop.
 
@@ -69,50 +69,50 @@ flowchart TD
 ### Loop 1: WebSocket clients
 
 Iterates the in-process `clients` map, one entry per authenticated
-WebSocket (`src/index.ts:144#"for (const [agentId, client] of clients) {"`).
+WebSocket (`src/index.ts:149#"for (const [agentId, client] of clients) {"`).
 
 1. Skips the sender, by username and by user id
-   (`src/index.ts:146-147#"if (client.agent.userId === msg.senderId) continue;"`).
+   (`src/index.ts:151-152#"if (client.agent.userId === msg.senderId) continue;"`).
 2. Computes `mentioned` and drops non-mentions for `receiveMode: 'mentions'`
-   (`src/index.ts:150-151#"if (client.agent.receiveMode === 'mentions' && !mentioned) continue;"`).
+   (`src/index.ts:155-156#"if (client.agent.receiveMode === 'mentions' && !mentioned) continue;"`).
 3. Calls the loop guard only when the agent is not mentioned
-   (`src/index.ts:153-154#"if (!mentioned && !shouldDeliver(client.agent.trustLevel"`).
+   (`src/index.ts:158-159#"if (!mentioned && !shouldDeliver(client.agent.trustLevel"`).
 4. For `delivery: 'openclaw-inject'` injects into the local OpenClaw session
    instead of writing a frame
-   (`src/index.ts:158-159#"if (client.agent.delivery === 'openclaw-inject') {"`).
+   (`src/index.ts:163-164#"if (client.agent.delivery === 'openclaw-inject') {"`).
    On a mention it first fetches unread room messages with the agent's own
-   token (`src/index.ts:162-167#"bridge.fetchMessagesSince(token, msg.roomId, lastSeenId, 50)"`)
+   token (`src/index.ts:167-172#"bridge.fetchMessagesSince(token, msg.roomId, lastSeenId, 50)"`)
    and records the message as seen
-   (`src/index.ts:174-175#"markMessageSeen(client.agent.userId, msg.roomId, msg.id);"`).
+   (`src/index.ts:179-180#"markMessageSeen(client.agent.userId, msg.roomId, msg.id);"`).
 5. Otherwise writes a `message` frame to the socket, carrying `threadId` and
    `senderId` next to the sender's username
-   (`src/index.ts:191-192#"safeSend(client.ws, {"`).
+   (`src/index.ts:196-197#"safeSend(client.ws, {"`).
 
 ### Loop 2: SSE agents
 
 Iterates every synced agent and keeps only those with an open SSE stream
-(`src/index.ts:208-209#"if (!hasSSEClient(agent.userId)) continue;"`).
+(`src/index.ts:216-217#"if (!hasSSEClient(agent.userId)) continue;"`).
 
 1. Skips the sender, then skips any agent that also holds a WebSocket
    connection, so WebSocket takes precedence over SSE
-   (`src/index.ts:213-214#"if (clients.has(agent.userId)) continue;"`).
+   (`src/index.ts:221-222#"if (clients.has(agent.userId)) continue;"`).
 2. Applies the same mention, `receiveMode` and loop-guard checks as loop 1,
    with the same mention bypass
-   (`src/index.ts:216-218#"if (!mentioned && !shouldDeliver(agent.trustLevel, senderIsAgent, msg.senderUsername, agent.username)) continue;"`).
+   (`src/index.ts:224-226#"if (!mentioned && !shouldDeliver(agent.trustLevel, senderIsAgent, msg.senderUsername, agent.username)) continue;"`).
 3. Asks the session registry which of the agent's sessions are bound to
    the message's thread, and when that is none (or the message has no
    thread) which are bound to its room; no binding, or a registry error,
    means no targets
-   (`src/index.ts:227#"if (targets.length === 0) targets = undefined;"`,
-   `src/index.ts:225-227#"targets = undefined;"`).
+   (`src/index.ts:236#"if (targets.length === 0) targets = undefined;"`,
+   `src/index.ts:237-239#"targets = undefined;"`).
 4. Fans the message out with `senderType` mapped to `'AI'` or `'HUMAN'`,
    `threadId` and `senderId` passed through unchanged, and the targets
-   (`src/index.ts:235-240#"senderType: msg.senderType === 'ai' ? 'AI' : 'HUMAN',"`).
+   (`src/index.ts:244-249#"senderType: msg.senderType === 'ai' ? 'AI' : 'HUMAN',"`).
    `fanoutToSSEClient` writes to the streams tied to the targeted sessions
    (`?session=` on the stream) when at least one of them is open, otherwise
    to every stream of the agent, so a binding to a session that lost its
    stream never swallows a message
-   (`src/byoa-sse.ts:467-471#"if (matching.length > 0) {"`).
+   (`src/byoa-sse.ts:475-479#"if (matching.length > 0) {"`).
    This loop does not look at `delivery`, so an openclaw-inject agent with an
    open stream also gets the SSE event.
 
@@ -124,27 +124,27 @@ Iterates agents whose `connectionType` is `webhook` or `both` and that have a
 
 1. Skips the sender by username, then requires an @mention; `receiveMode` is
    not consulted
-   (`src/index.ts:248-249#"if (!isMentioned(msg.content, agent)) continue;"`).
+   (`src/index.ts:258-259#"if (!isMentioned(msg.content, agent)) continue;"`).
 2. Skips agents connected over WebSocket
-   (`src/index.ts:213-214#"if (clients.has(agent.userId)) continue;"`).
+   (`src/index.ts:261-262#"if (clients.has(agent.userId)) continue;"`).
    There is no matching check for an open SSE stream, so an agent that holds
    a stream and has a webhook (or openclaw-inject) delivery gets the same
    mention twice: once from loop 2 and once from loop 3.
 3. Calls the loop guard last, only for a message that would be delivered, so
    there is no mention bypass on this path and an undelivered message never
    starts the cooldown
-   (`src/index.ts:254-256#"if (!shouldDeliver(agent.trustLevel, senderIsAgent, msg.senderUsername, agent.username)) continue;"`).
+   (`src/index.ts:264-266#"if (!shouldDeliver(agent.trustLevel, senderIsAgent, msg.senderUsername, agent.username)) continue;"`).
 4. openclaw-inject agents get the unread context fetched with the gateway's
    own token and the message marked seen
-   (`src/index.ts:260-271#"markMessageSeen(agent.userId, msg.roomId, msg.id);"`).
+   (`src/index.ts:270-281#"markMessageSeen(agent.userId, msg.roomId, msg.id);"`).
 5. Webhook agents without a `webhookUrl` are skipped
-   (`src/index.ts:287#"if (!agent.webhookUrl) continue;"`); the rest get the
+   (`src/index.ts:297#"if (!agent.webhookUrl) continue;"`); the rest get the
    unread context, again fetched with the gateway token, and the message is
-   marked seen (`src/index.ts:258-271#"markMessageSeen(agent.userId, msg.roomId, msg.id);"`).
+   marked seen (`src/index.ts:301-315#"markMessageSeen(agent.userId, msg.roomId, msg.id);"`).
    The body carries `messageId`, `sender`, `senderType`, `content`, `room`,
    `timestamp` and `context`
-   (`src/index.ts:307-314#"context: contextMessages,"`) and goes to
-   `dispatchWebhook` (`src/index.ts:325-331#"roomId: msg.roomId,"`).
+   (`src/index.ts:317-324#"context: contextMessages,"`) and goes to
+   `dispatchWebhook` (`src/index.ts:335-341#"roomId: msg.roomId,"`).
 
 ### Mention matching
 
@@ -153,9 +153,9 @@ Iterates agents whose `connectionType` is `webhook` or `both` and that have a
 as well, so the match is case-insensitive on both sides
 (`src/loop-guard.ts:51#"agent.mentionKey.toLowerCase()"`). All three
 loops call the same helper
-(`src/index.ts:150#"const mentioned = isMentioned(msg.content, client.agent);"`,
-`src/index.ts:216#"const mentioned = isMentioned(msg.content, agent);"`,
-`src/index.ts:249#"if (!isMentioned(msg.content, agent)) continue;"`).
+(`src/index.ts:155#"const mentioned = isMentioned(msg.content, client.agent);"`,
+`src/index.ts:224#"const mentioned = isMentioned(msg.content, agent);"`,
+`src/index.ts:259#"if (!isMentioned(msg.content, agent)) continue;"`).
 
 ## Loop-guard semantics
 
@@ -175,7 +175,7 @@ dispatched by webhook or openclaw-inject.
 
 Trust level is read for delivery nowhere in these loops. It sets the send
 rate limit on `POST /byoa/sse/messages`
-(`src/byoa-sse.ts:360-363#"const maxRequests = agent.trustLevel === 'elevated' ? 30 : 10;"`).
+(`src/byoa-sse.ts:367-370#"const maxRequests = agent.trustLevel === 'elevated' ? 30 : 10;"`).
 
 ## Webhook dispatch and retries
 
@@ -190,7 +190,7 @@ other non-2xx answer or a network error is retried up to three times after 1, 2 
 message is dropped and counted as lost
 (`src/webhook-dispatch.ts:136-140#"metrics.recordMessageLost(payload.agentId, payload.roomId, 'max retries exceeded');"`).
 The dispatch is not awaited by the routing loop
-(`src/index.ts:325#"dispatchWebhook({"`).
+(`src/index.ts:335#"dispatchWebhook({"`).
 
 ## Unread context and the read tracker
 
@@ -215,33 +215,34 @@ is in [process-bootstrap-and-local-state.md](process-bootstrap-and-local-state.m
 ## SSE replay buffer scope
 
 `fanoutToSSEClient` returns before it writes anything when the agent has no
-registered stream (`src/byoa-sse.ts:463-464#"if (!clients || clients.length === 0) return null;"`).
+registered stream (`src/byoa-sse.ts:471-472#"if (!clients || clients.length === 0) return null;"`).
 Otherwise it takes a global event id
-(`src/byoa-sse.ts:477#"const eventId = await redis.incr('sse:eventId');"`), adds
+(`src/byoa-sse.ts:485#"const eventId = await redis.incr('sse:eventId');"`), adds
 the message to the per-agent sorted set and resets that key's 24-hour expiry
-on every message (`src/byoa-sse.ts:486-488#"await redis.expire(replayKey, 86400);"`).
+on every message (`src/byoa-sse.ts:494-496#"await redis.expire(replayKey, 86400);"`).
 Entries are never trimmed, so the set expires 24 hours after the last stored
 message. A stream is unregistered as soon as the request closes
-(`src/byoa-sse.ts:209-215#"if (remaining.length === 0) sseClients.delete(agent.userId);"`),
+(`src/byoa-sse.ts:216-222#"if (remaining.length === 0) sseClients.delete(agent.userId);"`),
 and loop 2 skips agents without a stream, so a message that arrives while an
 agent has no open stream is never stored. On reconnect with a
 `Last-Event-ID` above 0 the gateway replays the agent's own key only
-(`src/byoa-sse.ts:193-194#"replayMissedMessages(agent.userId, lastEventId, sessionId, res).catch((err) =>"`,
-`src/byoa-sse.ts:412#"const entries = await redis.zrangebyscore("`). Replay
+(`src/byoa-sse.ts:200-201#"replayMissedMessages(agent.userId, lastEventId, sessionId, res).catch((err) =>"`,
+`src/byoa-sse.ts:419#"const entries = await redis.zrangebyscore("`). Replay
 therefore recovers messages that were written to a stream the client did not
 read, or to another stream of the same session (two streams are allowed per
-session, and two untagged ones per agent,
-`src/byoa-sse.ts:162#"if (clients.filter((c) => c.sessionId === sessionId).length >= MAX_STREAMS_PER_SESSION) {"`).
+session, two untagged ones per agent, and ten per agent in all, whatever the
+labels say,
+`src/byoa-sse.ts:167#"if (perLabel >= MAX_STREAMS_PER_SESSION || clients.length >= MAX_STREAMS_PER_AGENT) {"`).
 An event written to targeted sessions is stored with their ids and replayed
 only to a stream of one of them; an event written to every stream carries
 no ids and is replayed to every stream
-(`src/byoa-sse.ts:397#"if (targets && (sessionId === null || !targets.includes(sessionId))) continue;"`).
+(`src/byoa-sse.ts:404#"if (targets && (sessionId === null || !targets.includes(sessionId))) continue;"`).
 
 ## Task assignment
 
 A `task:assigned` event is injected only into an agent with
 `delivery: 'openclaw-inject'` whose user id matches the assignee
-(`src/index.ts:340-348#"if (!agent) return;"`); no other channel receives it.
+(`src/index.ts:352-360#"if (!agent) return;"`); no other channel receives it.
 Triologue emits `task:assigned` only to the assignee's own user room
 ([`server/src/services/taskPushService.ts`](https://github.com/LanNguyenSi/triologue/blob/91e0de030e957e5dc70d89d79c36316e64c86e7d/server/src/services/taskPushService.ts#L153-L155),
 lines 153 to 155, in the Triologue repository), so the gateway's connection receives the event

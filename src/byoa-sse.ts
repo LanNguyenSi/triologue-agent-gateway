@@ -51,6 +51,8 @@ interface SSEClient {
 
 /** Streams one agent may hold per session, and untagged. */
 const MAX_STREAMS_PER_SESSION = 2;
+/** Streams one agent may hold in total, whatever the session labels say. */
+const MAX_STREAMS_PER_AGENT = 10;
 
 interface AgentMessage {
   id: string;
@@ -157,15 +159,20 @@ sseRouter.get('/stream', authenticateSSE, (req: Request, res: Response) => {
 
   const clients = sseClients.get(agent.userId)!;
 
-  // Connection limit: max 2 concurrent streams per agent session, and max 2
-  // untagged streams per agent (the limit before sessions existed).
-  if (clients.filter((c) => c.sessionId === sessionId).length >= MAX_STREAMS_PER_SESSION) {
+  // Connection limits: max 2 concurrent streams per agent session, max 2
+  // untagged streams per agent (the limit before sessions existed), and a
+  // hard cap per agent, since the session label is not checked against the
+  // registry and must not open unbounded streams.
+  const perLabel = clients.filter((c) => c.sessionId === sessionId).length;
+  if (perLabel >= MAX_STREAMS_PER_SESSION || clients.length >= MAX_STREAMS_PER_AGENT) {
     res.write(
       formatSSE(0, 'error', {
         code: 'TOO_MANY_CONNECTIONS',
-        message: sessionId
-          ? `Max ${MAX_STREAMS_PER_SESSION} concurrent streams per session`
-          : `Max ${MAX_STREAMS_PER_SESSION} concurrent streams per agent`,
+        message: clients.length >= MAX_STREAMS_PER_AGENT
+          ? `Max ${MAX_STREAMS_PER_AGENT} concurrent streams per agent`
+          : sessionId
+            ? `Max ${MAX_STREAMS_PER_SESSION} concurrent streams per session`
+            : `Max ${MAX_STREAMS_PER_SESSION} untagged streams per agent`,
       })
     );
     return res.end();
@@ -452,8 +459,9 @@ export function getSSESessionIds(agentId: string): string[] {
  * open; otherwise (no targets, or none of the targeted sessions has a
  * stream) every stream of the agent receives it, as before sessions
  * existed, so a binding to a session that lost its stream never swallows
- * a message. Returns the session ids the message was written for, or null
- * when it went to every stream.
+ * a message. Returns the targeted session ids (all of them, not only the
+ * ones with an open stream, so a targeted session that reconnects gets
+ * the event replayed), or null when it went to every stream.
  */
 export async function fanoutToSSEClient(
   agentId: string,
@@ -470,7 +478,7 @@ export async function fanoutToSSEClient(
     const matching = clients.filter((c) => c.sessionId !== null && wanted.has(c.sessionId));
     if (matching.length > 0) {
       recipients = matching;
-      targets = [...new Set(matching.map((c) => c.sessionId!))];
+      targets = [...wanted];
     }
   }
 

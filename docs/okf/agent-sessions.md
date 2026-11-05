@@ -3,7 +3,7 @@ type: module
 title: Agent sessions, registry, bindings and expiry
 description: A session is one running agent runtime speaking for one agent token, registered through /byoa/sessions, kept in Redis as a hash with a 90-second TTL that connect, heartbeat and presence refresh in one MULTI with the write, with room and thread bindings in reverse-lookup sets that lazy reads and a 30-second sweep prune once the hash has expired and that are capped per session; every prune re-checks the hash so a reconnect is not undone, a heartbeat cannot resurrect an expired hash, every route is guarded against a rejected store call, the presence push folds the live sessions into the one status Triologue shows for the agent, and the API scopes every call to the token's own agent and rate-limits it apart from message sends.
 tags: [sessions, presence, redis, bindings, routing]
-timestamp: 2026-11-05T07:05:15Z
+timestamp: 2026-11-05T07:17:39Z
 sources:
   - src/sessions.ts
   - src/presence-push.ts
@@ -40,9 +40,9 @@ predecessor left behind are dropped first
 (`src/sessions.ts:144#"if (!existing.sessionId) await this.dropBindings(agentId, sessionId);"`).
 The registry is one `SessionRegistry` over a Redis client that `src/index.ts`
 creates next to the two of `byoa-sse.ts`
-(`src/index.ts:92#"const sessionRedis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');"`)
+(`src/index.ts:94#"const sessionRedis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {"`)
 and mounts under `/byoa/sessions`
-(`src/index.ts:95#"app.use('/byoa/sessions', createSessionsRouter(sessionRegistry));"`).
+(`src/index.ts:100#"app.use('/byoa/sessions', createSessionsRouter(sessionRegistry));"`).
 
 ## Keys and expiry
 
@@ -92,9 +92,9 @@ The sweep does the same for every agent in `sessions:agents`
 (`src/sessions.ts:306#"async sweep(): Promise<number> {"`); `src/index.ts`
 runs it every `SWEEP_INTERVAL_MS`
 (`src/sessions.ts:33#"export const SWEEP_INTERVAL_MS = 30_000;"`,
-`src/index.ts:726#"const sweepTimer = setInterval(() => {"`) and clears the
+`src/index.ts:738#"const sweepTimer = setInterval(() => {"`) and clears the
 timer and disconnects the client on shutdown
-(`src/index.ts:743#"sessionRedis.disconnect();"`). Both paths end in the same
+(`src/index.ts:755#"sessionRedis.disconnect();"`). Both paths end in the same
 private `expire`, which re-checks the hash right before it acts (a session
 that reconnected with the same id in the meantime keeps its fresh
 bindings), then drops the bindings, leaves the session set and announces
@@ -120,8 +120,8 @@ along), posts it to Triologue's `POST /api/agents/me/presence` with the
 agent's current token, repeats it on every sweep so Triologue's 120-second
 TTL stays alive, and sends `offline` once when the last session is gone
 (`src/presence-push.ts:35#"export function aggregatePresence(sessions: AgentSession[]): PresenceBody {"`,
-`src/presence-push.ts:112#"if (body.status === 'offline' && this.lastStatus.get(agentId) === 'offline') return;"`,
-`src/index.ts:730#"return presencePusher.refreshAll();"`). A failed push is logged
+`src/presence-push.ts:137#"if (body.status === 'offline' && this.lastStatus.get(agentId) === 'offline') return;"`,
+`src/index.ts:742#"return presencePusher.refreshAll();"`). A failed push is logged
 and the next event or refresh tries again; the pusher never throws into
 the registry. The token comes from the agent index
 (`src/auth.ts:176#"export function getCurrentTokenForAgent(agentUserId: string): string | null {"`),

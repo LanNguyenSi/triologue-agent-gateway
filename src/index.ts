@@ -89,7 +89,12 @@ app.use('/byoa/mcp', mcpRouter);
 // Agent sessions: a Redis-backed registry of running agent runtimes (host,
 // cwd, status, bound rooms and threads) behind /byoa/sessions. Its own Redis
 // client, like the two in byoa-sse.ts; expired sessions are swept in start().
-const sessionRedis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+// Fail fast: a binding lookup must not wait on a reconnecting Redis, the
+// routing loop falls back to every stream when the registry cannot answer.
+const sessionRedis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+  maxRetriesPerRequest: 1,
+  enableOfflineQueue: false,
+});
 sessionRedis.on('error', (err: Error) => console.error(`[sessions] redis error: ${err.message}`));
 export const sessionRegistry = new SessionRegistry(sessionRedis);
 app.use('/byoa/sessions', createSessionsRouter(sessionRegistry));
@@ -205,6 +210,9 @@ bridge.onMessage(async (msg) => {
   }
 
   // ── SSE agents: forward with same filtering as WebSocket ──
+  // The registry lookups run per agent without blocking the webhook loop
+  // below; the handler awaits them all at the end.
+  const sseDeliveries: Promise<unknown>[] = [];
   for (const agent of getAllAgents()) {
     if (!hasSSEClient(agent.userId)) continue;
     // Don't send back to sender
@@ -217,30 +225,32 @@ bridge.onMessage(async (msg) => {
     if (agent.receiveMode === 'mentions' && !mentioned) continue;
     if (!mentioned && !shouldDeliver(agent.trustLevel, senderIsAgent, msg.senderUsername, agent.username)) continue;
 
-    // Session-aware delivery: the sessions bound to the message's thread win,
-    // then the sessions bound to its room; without either (or when the
-    // registry cannot be read) every stream of the agent gets it.
-    let targets: string[] | undefined;
-    try {
-      if (msg.threadId) targets = await sessionRegistry.sessionsForThread(agent.userId, msg.threadId);
-      if (!targets || targets.length === 0) targets = await sessionRegistry.sessionsForRoom(agent.userId, msg.roomId);
-      if (targets.length === 0) targets = undefined;
-    } catch (err: any) {
-      console.warn(`[sessions] binding lookup failed for ${agent.username}: ${err?.message ?? err}`);
-      targets = undefined;
-    }
+    sseDeliveries.push((async () => {
+      // Session-aware delivery: the sessions bound to the message's thread win,
+      // then the sessions bound to its room; without either (or when the
+      // registry cannot be read) every stream of the agent gets it.
+      let targets: string[] | undefined;
+      try {
+        if (msg.threadId) targets = await sessionRegistry.sessionsForThread(agent.userId, msg.threadId);
+        if (!targets || targets.length === 0) targets = await sessionRegistry.sessionsForRoom(agent.userId, msg.roomId);
+        if (targets.length === 0) targets = undefined;
+      } catch (err: any) {
+        console.warn(`[sessions] binding lookup failed for ${agent.username}: ${err?.message ?? err}`);
+        targets = undefined;
+      }
 
-    fanoutToSSEClient(agent.userId, {
-      id: msg.id,
-      room: msg.roomId,
-      roomName: msg.roomName || '',
-      threadId: msg.threadId,
-      sender: msg.senderUsername,
-      senderId: msg.senderId,
-      senderType: msg.senderType === 'ai' ? 'AI' : 'HUMAN',
-      content: msg.content,
-      timestamp: msg.timestamp,
-    }, targets);
+      await fanoutToSSEClient(agent.userId, {
+        id: msg.id,
+        room: msg.roomId,
+        roomName: msg.roomName || '',
+        threadId: msg.threadId,
+        sender: msg.senderUsername,
+        senderId: msg.senderId,
+        senderType: msg.senderType === 'ai' ? 'AI' : 'HUMAN',
+        content: msg.content,
+        timestamp: msg.timestamp,
+      }, targets);
+    })().catch((err: any) => console.error(`[SSE] delivery to ${agent.username} failed: ${err?.message ?? err}`)));
   }
 
   // ── Non-WebSocket agents: dispatch on @mention via webhook or openclaw-inject ──
@@ -331,6 +341,8 @@ bridge.onMessage(async (msg) => {
       roomId: msg.roomId,
     });
   }
+
+  await Promise.allSettled(sseDeliveries);
 });
 
 // ── task:assigned → inject into OpenClaw session ──────────────────────────
