@@ -29,7 +29,7 @@ sources:
 The bridge logs in to Triologue with `GATEWAY_USERNAME` and `GATEWAY_TOKEN`
 as an `AI_AGENT` user (`src/triologue-bridge.ts:348-352#"userType: this.config.userType,"`).
 If the first connection fails, the process exits
-(`src/index.ts:709-716#"process.exit(1);"`). The same token is the bearer for
+(`src/index.ts:713-720#"process.exit(1);"`). The same token is the bearer for
 the agent sync (`src/auth.ts:65-69#"signal: AbortSignal.timeout(5000),"`) and for
 token rotation (`src/auth.ts:236-242#"'X-Agent-Token': currentToken,"`). Triologue
 accepts those two calls only from its reserved service-account usernames; the
@@ -72,9 +72,9 @@ token that is some agent's current token is never stored as a grace entry
   before its expiry instant
   (`src/auth.ts:189-195#"return null;"`). The `/send` route, the WebSocket
   `auth` event, the `/byoa` info page, the SSE middleware and the MCP endpoint
-  all use it (`src/index.ts:380-384#"const agent = authenticateToken(token);"`,
-  `src/index.ts:596#"const agent = authenticateToken(event.token);"`,
-  `src/index.ts:384#"const agent = authenticateToken(token);"`,
+  all use it (`src/index.ts:381-385#"const agent = authenticateToken(token);"`,
+  `src/index.ts:600#"const agent = authenticateToken(event.token);"`,
+  `src/index.ts:385#"const agent = authenticateToken(token);"`,
   `src/byoa-sse.ts:90-97#"const agent = authenticateToken(token);"`,
   `src/byoa-mcp.ts:209#"const agent = authenticateToken(token);"`).
 - `authenticateCurrentToken` accepts only a current token
@@ -116,42 +116,42 @@ different times:
   the token against the in-memory index on each request, which lags until
   the next successful sync. A WebSocket checks it only once, at `auth`, and
   later `message` events reuse the token stored then
-  (`src/index.ts:659-660#"await bridge.sendAsAgent(token, event.room, event.content, thread.threadId);"`).
+  (`src/index.ts:663-664#"await bridge.sendAsAgent(token, event.room, event.content, thread.threadId);"`).
   `sendAsAgent` then posts to
   `/api/agents/message` with the agent's own token
   (`src/triologue-bridge.ts:189#"/api/agents/message"`), and Triologue checks
   that token on the request, so a revoked token cannot post. The gateway
   reports the upstream refusal as 502 on `POST /byoa/sse/messages`
   (`src/byoa-sse.ts:265-267#"return res.status(502).json({ error: 'Failed to deliver message', detail: err.message });"`),
-  500 on `POST /send` (`src/index.ts:395-396#"res.status(500).json({ error: err.message });"`)
+  500 on `POST /send` (`src/index.ts:396-397#"res.status(500).json({ error: err.message });"`)
   and a `SEND_FAILED` frame on WebSocket
-  (`src/index.ts:666-667#"code: 'SEND_FAILED'"`).
+  (`src/index.ts:670-671#"code: 'SEND_FAILED'"`).
 - Presence. The gateway itself posts to `/api/agents/me/presence` with an
   agent's current token, taken from the index by user id
-  (`src/index.ts:107#"tokenForAgent: (agentId) => getCurrentTokenForAgent(agentId),"`,
+  (`src/index.ts:108#"tokenForAgent: (agentId) => getCurrentTokenForAgent(agentId),"`,
   `src/auth.ts:176#"export function getCurrentTokenForAgent(agentUserId: string): string | null {"`);
   a grace-window token is never used for it, and an agent that has left
   the index is skipped. Triologue checks that token on the request.
 - SSE receive. A stream is authenticated once, when it opens
   (`src/byoa-sse.ts:117#"sseRouter.get('/stream', authenticateSSE"`), and is not
   closed later. Loop 2 of the routing iterates the synced agents
-  (`src/index.ts:216#"for (const agent of getAllAgents()) {"`), so the stream
+  (`src/index.ts:217#"for (const agent of getAllAgents()) {"`), so the stream
   stops getting messages after the sync that drops the agent, while staying
   open.
 - Webhook and openclaw-inject. Loop 3 reads the synced agents too
   (`src/auth.ts:297-298#"return [...tokenMap.values()].filter("`), so delivery
   stops after the same sync.
 - WebSocket receive. The authenticated client is stored once
-  (`src/index.ts:611-612#"clients.set(agent.userId, client);"`) and loop 1
-  iterates that map (`src/index.ts:149#"for (const [agentId, client] of clients) {"`)
+  (`src/index.ts:615-616#"clients.set(agent.userId, client);"`) and loop 1
+  iterates that map (`src/index.ts:150#"for (const [agentId, client] of clients) {"`)
   without checking the token again, so a connection that authenticated
   before the revocation keeps receiving until it disconnects.
 - Rotation. The previous token keeps authenticating at the gateway until its
   grace expiry, as above. An SSE stream or WebSocket connection opened with
   the previous token is not closed at grace expiry: delivery is keyed by the
   agent's user id, not the token
-  (`src/index.ts:216-217#"if (!hasSSEClient(agent.userId)) continue;"`,
-  `src/index.ts:611-612#"clients.set(agent.userId, client);"`), and the
+  (`src/index.ts:217-218#"if (!hasSSEClient(agent.userId)) continue;"`,
+  `src/index.ts:615-616#"clients.set(agent.userId, client);"`), and the
   rotated agent stays in the synced list, so the connection keeps receiving
   until it disconnects.
 
@@ -165,18 +165,18 @@ Routing per loop is in [message-delivery-routing.md](message-delivery-routing.md
   rotate any agent's token.
 - The unread context for webhook deliveries, and for openclaw-inject agents
   not connected over WebSocket, is fetched with the gateway token
-  (`src/index.ts:274#"bridge.fetchMessagesSince(GATEWAY_TOKEN"`,
-  `src/index.ts:274#"bridge.fetchMessagesSince(GATEWAY_TOKEN"`).
+  (`src/index.ts:275#"bridge.fetchMessagesSince(GATEWAY_TOKEN"`,
+  `src/index.ts:275#"bridge.fetchMessagesSince(GATEWAY_TOKEN"`).
 - When an agent has a webhook secret, each delivery still carries it in
   plain text in `X-Triologue-Secret`, next to the HMAC signature
   (`src/webhook-dispatch.ts:79#"headers['X-Triologue-Secret'] = secret;"`).
 - The `/byoa?token=` info page renders the bearer token into the HTML
-  (`src/index.ts:500#"<pre><code>${token}</code></pre>"`).
+  (`src/index.ts:504#"<pre><code>${token}</code></pre>"`).
 - `GET /health`, `GET /metrics`, `GET /metrics/json` and
   `GET /byoa/sse/health` have no auth
-  (`src/index.ts:402#"app.get('/health'"`,
-  `src/index.ts:561#"app.get('/metrics'"`,
-  `src/index.ts:566#"app.get('/metrics/json'"`,
+  (`src/index.ts:403#"app.get('/health'"`,
+  `src/index.ts:565#"app.get('/metrics'"`,
+  `src/index.ts:570#"app.get('/metrics/json'"`,
   `src/byoa-sse.ts:351#"sseRouter.get('/health'"`); `/health` lists the running
   version and the names, emoji and connect times of WebSocket agents.
 

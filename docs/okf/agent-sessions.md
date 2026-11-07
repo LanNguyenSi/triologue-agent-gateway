@@ -40,9 +40,9 @@ predecessor left behind are dropped first
 (`src/sessions.ts:144#"if (!existing.sessionId) await this.dropBindings(agentId, sessionId);"`).
 The registry is one `SessionRegistry` over a Redis client that `src/index.ts`
 creates next to the two of `byoa-sse.ts`
-(`src/index.ts:94#"const sessionRedis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {"`)
+(`src/index.ts:95#"const sessionRedis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {"`)
 and mounts under `/byoa/sessions`
-(`src/index.ts:100#"app.use('/byoa/sessions', createSessionsRouter(sessionRegistry));"`).
+(`src/index.ts:101#"app.use('/byoa/sessions', createSessionsRouter(sessionRegistry));"`).
 
 ## Keys and expiry
 
@@ -92,9 +92,9 @@ The sweep does the same for every agent in `sessions:agents`
 (`src/sessions.ts:306#"async sweep(): Promise<number> {"`); `src/index.ts`
 runs it every `SWEEP_INTERVAL_MS`
 (`src/sessions.ts:33#"export const SWEEP_INTERVAL_MS = 30_000;"`,
-`src/index.ts:738#"const sweepTimer = setInterval(() => {"`) and clears the
+`src/index.ts:742#"const sweepTimer = setInterval(() => {"`) and clears the
 timer and disconnects the client on shutdown
-(`src/index.ts:755#"sessionRedis.disconnect();"`). Both paths end in the same
+(`src/index.ts:759#"sessionRedis.disconnect();"`). Both paths end in the same
 private `expire`, which re-checks the hash right before it acts (a session
 that reconnected with the same id in the meantime keeps its fresh
 bindings), then drops the bindings, leaves the session set and announces
@@ -121,7 +121,7 @@ agent's current token, repeats it on every sweep so Triologue's 120-second
 TTL stays alive, and sends `offline` once when the last session is gone
 (`src/presence-push.ts:35#"export function aggregatePresence(sessions: AgentSession[]): PresenceBody {"`,
 `src/presence-push.ts:137#"if (body.status === 'offline' && this.lastStatus.get(agentId) === 'offline') return;"`,
-`src/index.ts:742#"return presencePusher.refreshAll();"`). A failed push is logged
+`src/index.ts:746#"return presencePusher.refreshAll();"`). A failed push is logged
 and the next event or refresh tries again; the pusher never throws into
 the registry. The token comes from the agent index
 (`src/auth.ts:176#"export function getCurrentTokenForAgent(agentUserId: string): string | null {"`),
