@@ -136,7 +136,7 @@ describe('dist/ entrypoint (matches Dockerfile CMD ["node", "dist/index.js"])', 
     expect(code).toBe(0);
     const line = stdout.split('\n').find((l) => l.startsWith('HEALTH_JSON:'));
     expect(line).toBeDefined();
-    const body = JSON.parse(line.slice('HEALTH_JSON:'.length));
+    const body = JSON.parse(line!.slice('HEALTH_JSON:'.length));
     const rootVersion = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
     expect(body.status).toBe('ok');
     expect(body.version).toBe(rootVersion);

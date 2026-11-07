@@ -11,7 +11,7 @@
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import type { AddressInfo } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
 process.env.GATEWAY_TOKEN = 'test-gateway-token';

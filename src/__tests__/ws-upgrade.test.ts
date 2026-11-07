@@ -23,7 +23,8 @@
  */
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import type { Server, AddressInfo } from 'node:http';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
 import type { AgentInfo } from '../types.js';
 
@@ -205,7 +206,7 @@ afterAll(async () => {
   for (const ws of openSockets) {
     if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.terminate();
   }
-  await new Promise<void>((resolve) => server.close(resolve));
+  await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
 describe('WebSocket upgrade routing on /byoa/ws', () => {
