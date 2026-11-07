@@ -144,12 +144,18 @@ available to a bridge run either. The bridge does NOT use `bypassPermissions`:
 that mode allows every tool that exists, and `--allowedTools` does not narrow
 it, it only adds auto-approvals.
 
-This was checked against Claude Code 2.1.306: the flags need a `claude` that
-supports `--tools`, `dontAsk`, `--permission-prompts` and `--setting-sources`;
-an older binary exits with an error (logged at warn level) instead of running
-unrestricted. The user settings file under `HOME` is still read, so rules or
-hooks you put there apply to bridge runs; keep it free of both on a bridge
-host.
+This was checked against Claude Code 2.1.306, with the following observed
+behaviour: on that release an unknown option is rejected before any model
+call, so a `claude` older than these flags exits with an error on every run
+(logged at warn level) instead of running unrestricted. The bridge now also
+checks at startup, before authenticating: it runs `<CLAUDE_CMD> --help` once
+(10-second bound, stdout and stderr read together) and refuses to start (error
+line, exit 1) unless the help output lists `--tools`, `--permission-prompts`,
+`--setting-sources` and the `dontAsk` permission mode as whole tokens, and the
+same refusal applies when the binary is missing, `--help` exits non-zero, or
+`--help` hangs past the timeout. The user settings file under `HOME` is still
+read, so rules or hooks you put there apply to bridge runs; keep it free of
+both on a bridge host.
 
 ## Edge-case handling
 

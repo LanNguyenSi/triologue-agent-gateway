@@ -21,6 +21,7 @@ import { SseClient } from './sse-client.js';
 import { WorkQueue } from './queue.js';
 import { shouldTrigger, type AgentIdentity, type IncomingMessage } from './mention.js';
 import { runClaude } from './claude-runner.js';
+import { preflightClaude, describePreflightFailure } from './claude-preflight.js';
 
 interface AgentStatus {
   userId: string;
@@ -99,6 +100,15 @@ async function main(): Promise<void> {
   const log = logger(cfg.logLevel);
 
   log('info', `Starting triologue-bridge → ${cfg.gatewayUrl}`);
+
+  // Fail visibly at startup rather than on every @mention: a claude
+  // without the tool-restriction flags rejects each run, so a silent
+  // pass here would only surface as a warn line per mention.
+  const preflight = await preflightClaude(cfg.claudeCmd);
+  if (!preflight.ok) {
+    log('error', describePreflightFailure(cfg.claudeCmd, preflight));
+    process.exit(1);
+  }
 
   let status: AgentStatus;
   try {
