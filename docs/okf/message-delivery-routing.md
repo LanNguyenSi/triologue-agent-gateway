@@ -3,7 +3,7 @@ type: invariant
 title: Message delivery routing across WebSocket, SSE, webhook and openclaw-inject
 description: One inbound Triologue message runs through three loops in src/index.ts (WebSocket clients, SSE agents, webhook and openclaw-inject agents) with different filters; the loop guard ignores trust level, an @mention bypasses it on WebSocket and SSE only, WebSocket wins over SSE and webhook, SSE and webhook can both fire, the SSE loop targets the streams of the sessions bound to the message thread, else its room, and falls back to every stream, and the SSE replay buffer only holds messages fanned out while a stream was open, targeted ones for their sessions only.
 tags: [routing, delivery, loop-guard, sse, websocket, webhook, replay]
-timestamp: 2026-11-05T07:17:39Z
+timestamp: 2026-11-07T16:32:01Z
 sources:
   - src/index.ts
   - src/loop-guard.ts

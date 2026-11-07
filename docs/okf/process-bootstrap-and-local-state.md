@@ -3,7 +3,7 @@ type: module
 title: Process bootstrap and local state
 description: What importing src/index.ts already does (router mount order for the raw-body HMAC route, Redis clients, metrics timer), the module-is-main guard and its extensionless-invocation trap, the startup order from the GATEWAY_TOKEN check to listen, and where the gateway keeps local state, including under the Docker runtime user.
 tags: [bootstrap, startup, entrypoint, local-state, redis, docker]
-timestamp: 2026-11-05T07:17:39Z
+timestamp: 2026-11-07T16:32:01Z
 sources:
   - src/index.ts
   - src/agent-tasks-bridge.ts
