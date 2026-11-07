@@ -177,8 +177,8 @@ Routing per loop is in [message-delivery-routing.md](message-delivery-routing.md
   (`src/index.ts:402#"app.get('/health'"`,
   `src/index.ts:561#"app.get('/metrics'"`,
   `src/index.ts:566#"app.get('/metrics/json'"`,
-  `src/byoa-sse.ts:351#"sseRouter.get('/health'"`); `/health` lists the names,
-  emoji and connect times of WebSocket agents.
+  `src/byoa-sse.ts:351#"sseRouter.get('/health'"`); `/health` lists the running
+  version and the names, emoji and connect times of WebSocket agents.
 
 ## What breaks it
 

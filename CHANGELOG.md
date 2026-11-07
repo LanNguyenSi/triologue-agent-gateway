@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `GET /health` now reports the running build's `version`, read once at startup from the repository's root `package.json` resolved relative to the module (works from `tsx src/index.ts` and from `dist/`; the runtime image already carries `package.json`); a read failure or a non-string value logs one warning and reports `"unknown"` without affecting the server, and `/metrics` is unchanged. New regression tests boot the real upgrade routing on an ephemeral port: `/byoa/ws` with a valid token is accepted and receives the `auth_ok` frame, an invalid token is refused (`auth_error` then close 4003), and an upgrade to any other path is refused with HTTP 400; the dist boot test asserts the built server's `/health` version equals `package.json`.
+
 ### Fixed
 
 - **`docs/deployment.md` no longer suggests `--network host`.** The gateway binds to all interfaces, so that form put `/metrics` and `/byoa?token=` on the public address of a host without a firewall; the guide now joins the Triologue network and publishes on the Docker bridge address only.

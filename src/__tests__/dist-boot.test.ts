@@ -28,7 +28,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -109,5 +109,37 @@ describe('dist/ entrypoint (matches Dockerfile CMD ["node", "dist/index.js"])', 
     });
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('GATEWAY_TOKEN required');
+  }, 30_000);
+
+  it('GET /health on the built server reports the root package.json version', async () => {
+    // The exact module dist/index.js's Docker CMD runs, served in-process on
+    // an ephemeral port (module-is-main guard means importing never listens).
+    // APP_VERSION resolves ../package.json relative to dist/version.js, so a
+    // wrong resolution (or a missing package.json in the image) surfaces as
+    // "unknown" here. REDIS_URL points at a closed port so the module-load
+    // Redis clients never touch a developer's local Redis; ioredis logs its
+    // reconnect errors itself instead of throwing.
+    const script = [
+      "const { app } = await import('./.dist-boot-test/index.js');",
+      "const srv = app.listen(0, '127.0.0.1', async () => {",
+      "  const res = await fetch(`http://127.0.0.1:${srv.address().port}/health`);",
+      "  const body = await res.json();",
+      "  console.log('HEALTH_JSON:' + JSON.stringify({ status: body.status, version: body.version }));",
+      "  srv.closeAllConnections();",
+      "  srv.close(() => process.exit(0));",
+      "});",
+    ].join('\n');
+    const { stdout, code } = await runNode(['--input-type=module', '-e', script], {
+      GATEWAY_TOKEN: 'dist-boot-health-token',
+      REDIS_URL: 'redis://127.0.0.1:1',
+    });
+    expect(code).toBe(0);
+    const line = stdout.split('\n').find((l) => l.startsWith('HEALTH_JSON:'));
+    expect(line).toBeDefined();
+    const body = JSON.parse(line.slice('HEALTH_JSON:'.length));
+    const rootVersion = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version;
+    expect(body.status).toBe('ok');
+    expect(body.version).toBe(rootVersion);
+    expect(body.version).not.toBe('unknown');
   }, 30_000);
 });

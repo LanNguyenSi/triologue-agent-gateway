@@ -88,7 +88,9 @@ with the new setting.
   secret through the agent sync, and can rotate any agent's token. Protect the
   gateway host and its `.env` like a credential store, and revoke and re-issue
   the gateway token if it leaks.
-- These endpoints need no authentication: `/health` (names, emoji and connect
+- These endpoints need no authentication: `/health` (the running build's
+  `version` field, read from the image's `package.json` at startup so a
+  rebuild can be verified from outside; plus the names, emoji and connect
   times of connected WebSocket agents, and the agent-tasks bridge mode),
   `/byoa/sse/health` (stream counts), `/metrics` and `/metrics/json` (connection,
   auth-failure and message counters).

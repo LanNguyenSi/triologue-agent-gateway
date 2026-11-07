@@ -30,6 +30,7 @@ import { metrics } from './metrics.js';
 import { sseRouter, shutdownSSE, setBridge as setSSEBridge, hasSSEClient, fanoutToSSEClient } from './byoa-sse.js';
 import { mcpRouter, setBridge as setMCPBridge } from './byoa-mcp.js';
 import { createAgentTasksBridgeRouter } from './agent-tasks-bridge.js';
+import { APP_VERSION } from './version.js';
 import type { AgentInfo, WsClient } from './types.js';
 
 // ── Config ──
@@ -406,6 +407,9 @@ app.get('/health', (_, res) => {
   const agentTasksBridgeEnabled = !!(AGENT_TASKS_BOT_TOKEN && AGENT_TASKS_INBOX_ROOM_ID) && agentTasksAuthConfigured;
   res.json({
     status: 'ok',
+    // Read once at startup from the root package.json (see src/version.ts);
+    // "unknown" when that read failed. Lets a rebuild be verified from outside.
+    version: APP_VERSION,
     connectedAgents: clients.size,
     agents: [...clients.values()].map(c => ({
       name: c.agent.name,
