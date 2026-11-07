@@ -14,6 +14,11 @@
  * run (buildClaudeEnv in claude-runner.ts); the check hands it nothing
  * more. A wedged `--help` is killed at the timeout so the check itself
  * can never hang the bridge or leave a stray process.
+ *
+ * This is a best-effort early warning: it tests that each token appears in
+ * the help text, not that an option defines it, so a mention in another
+ * option's description also satisfies it. The per-mention failure path
+ * stays the backstop.
  */
 
 import { spawn } from 'node:child_process';

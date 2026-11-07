@@ -153,7 +153,9 @@ checks at startup, before authenticating: it runs `<CLAUDE_CMD> --help` once
 line, exit 1) unless the help output lists `--tools`, `--permission-prompts`,
 `--setting-sources` and the `dontAsk` permission mode as whole tokens, and the
 same refusal applies when the binary is missing, `--help` exits non-zero, or
-`--help` hangs past the timeout. The user settings file under `HOME` is still
+`--help` hangs past the timeout. This is a best-effort early warning: it
+tests that each token appears in the help text, not that an option defines it;
+a failing run still logs at warn level. The user settings file under `HOME` is still
 read, so rules or hooks you put there apply to bridge runs; keep it free of
 both on a bridge host.
 
