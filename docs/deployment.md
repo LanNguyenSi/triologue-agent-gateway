@@ -22,6 +22,28 @@ README quick start (`TRIOLOGUE_URL=http://localhost:4001`, `REDIS_URL` unset)
 does not work as is: use, for example, host names on a shared Docker network.
 The gateway exits if its first connection to Triologue fails.
 
+When the Triologue API and Redis listen only on the host's loopback interface
+(the shipped Triologue compose file publishes the API on `127.0.0.1:4001`), run
+the container in the host's network namespace. `localhost` then is the host, the
+`.env` values above work as they are, and the gateway listens on the host's port
+9500, where Triologue's `/gateway/` proxy expects it. Build one image per release
+tag, so going back is starting the previous tag's image with the same env file
+and volume:
+
+```bash
+git checkout v0.6.0
+docker build -t triologue-agent-gateway:0.6.0 .
+docker run -d --name triologue-agent-gateway --restart unless-stopped \
+  --network host --env-file .env -v gateway-state:/app/state \
+  triologue-agent-gateway:0.6.0
+
+# Back to the previous release
+docker rm -f triologue-agent-gateway
+docker run -d --name triologue-agent-gateway --restart unless-stopped \
+  --network host --env-file .env -v gateway-state:/app/state \
+  triologue-agent-gateway:0.5.0
+```
+
 The image contains only the built `dist/` and the production dependencies. To use
 `AGENTS_CONFIG`, mount the file into the container and point the variable at
 it.

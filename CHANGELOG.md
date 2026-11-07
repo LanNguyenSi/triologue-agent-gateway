@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-07
+
 ### Added
 
 - Session-aware delivery and presence: an SSE stream opened with `?session=<sessionId>` (or `X-Session-Id`) belongs to that agent session, and the SSE delivery loop sends a message to the streams of the sessions bound to its thread, else to those bound to its room; when nothing is bound, or none of the bound sessions has an open stream, every stream of the agent gets it as before. The stream limit is now 2 per session plus 2 untagged streams per agent, and 10 per agent in all (was 2 per agent); a targeted event is replayed only to a stream of a targeted session. The gateway also reports each agent's status to Triologue (`POST /api/agents/me/presence`, the agent's own token, triologue PR 346): on every session change, debounced, and refreshed with every sweep; the most urgent live session wins (waiting for approval, error, working, online), `offline` is sent once when the last session ends, and a Triologue without the route only produces a warning. Internal: `getCurrentTokenForAgent` in `src/auth.ts`, `src/presence-push.ts`, `fanoutToSSEClient` takes optional target sessions and returns them.
