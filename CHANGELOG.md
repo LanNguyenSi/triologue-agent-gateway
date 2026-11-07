@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`docs/deployment.md` no longer suggests `--network host`.** The gateway binds to all interfaces, so that form put `/metrics` and `/byoa?token=` on the public address of a host without a firewall; the guide now joins the Triologue network and publishes on the Docker bridge address only.
+
 ## [0.6.0] - 2026-11-07
 
 ### Added
