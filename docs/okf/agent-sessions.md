@@ -3,7 +3,7 @@ type: module
 title: Agent sessions, registry, bindings and expiry
 description: A session is one running agent runtime speaking for one agent token, registered through /byoa/sessions, kept in Redis as a hash with a 90-second TTL that connect, heartbeat and presence refresh in one MULTI with the write, with room and thread bindings in reverse-lookup sets that lazy reads and a 30-second sweep prune once the hash has expired and that are capped per session; every prune re-checks the hash so a reconnect is not undone, a heartbeat cannot resurrect an expired hash, every route is guarded against a rejected store call, the presence push folds the live sessions into the one status Triologue shows for the agent, and the API scopes every call to the token's own agent and rate-limits it apart from message sends.
 tags: [sessions, presence, redis, bindings, routing]
-timestamp: 2026-11-05T07:17:39Z
+timestamp: 2026-11-07T16:32:01Z
 sources:
   - src/sessions.ts
   - src/presence-push.ts
