@@ -10,7 +10,15 @@
  *     session (`GATEWAY_URL`, `TRIOLOGUE_URL`, `ALLOWED_SENDERS`,
  *     `ALLOW_AGENTS`): the file wins; the environment counts only with the
  *     prefix and only when the file lacks the key. A plain `GATEWAY_URL` in
- *     the environment (bridge/ asks for one) is ignored with a warning.
+ *     the environment (bridge/ asks for one) is ignored with a warning (with
+ *     an error that says so when it was the only one). `TRIOLOGUE_URL` already
+ *     has the prefix, so a shell export would win whenever the file lacks it;
+ *     it does not: when the file sets `GATEWAY_URL` but not `TRIOLOGUE_URL`,
+ *     the Triologue URL is derived from the file's `GATEWAY_URL` and an
+ *     environment `TRIOLOGUE_URL` is ignored with a warning (its name, not its
+ *     value). The environment's `TRIOLOGUE_URL` counts only when the gateway
+ *     URL also comes from the environment (`TRIOLOGUE_GATEWAY_URL`) and the
+ *     file has neither.
  *   - The keys whose plain names other programs use too (`HOST`, `PROJECT`,
  *     `ROOMS`, `RUNTIME`, `LOG_LEVEL`): the environment wins, but only with
  *     the prefix, so a shell that exports `HOST=0.0.0.0` does not change what
@@ -179,10 +187,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, platform: NodeJ
   const warnings: string[] = [];
   const nonEmpty = (v: string | undefined): string | undefined => (v !== undefined && v !== '' ? v : undefined);
   const prefixedName = (key: string): string => (key.startsWith('TRIOLOGUE_') ? key : `TRIOLOGUE_${key}`);
+  // The file names the gateway but not Triologue: the Triologue URL follows the file's gateway URL.
+  const deriveTriologueUrl = (nonEmpty(fileValues.TRIOLOGUE_GATEWAY_URL) ?? nonEmpty(fileValues.GATEWAY_URL)) !== undefined
+    && nonEmpty(fileValues.TRIOLOGUE_URL) === undefined;
   const get = (key: string): string | undefined => {
     const prefixed = prefixedName(key);
     const fromFile = nonEmpty(fileValues[prefixed]) ?? nonEmpty(fileValues[key]);
-    if (FILE_FIRST.has(key)) return fromFile ?? nonEmpty(env[prefixed]);
+    if (FILE_FIRST.has(key)) {
+      if (fromFile !== undefined) return fromFile;
+      // Derived from the file's gateway URL, not taken from a shell.
+      if (key === 'TRIOLOGUE_URL' && deriveTriologueUrl) return undefined;
+      return nonEmpty(env[prefixed]);
+    }
     return nonEmpty(env[prefixed])
       ?? (PREFIX_ONLY_IN_ENV.has(key) ? undefined : nonEmpty(env[key]))
       ?? fromFile;
@@ -192,9 +208,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, platform: NodeJ
       warnings.push(`${key} in the environment ignored: set it in ${envFile} or as ${prefixedName(key)}`);
     }
   }
+  if (deriveTriologueUrl && nonEmpty(env.TRIOLOGUE_URL) !== undefined) {
+    warnings.push(`TRIOLOGUE_URL in the environment ignored: ${envFile} sets GATEWAY_URL, so the Triologue URL is derived from it; set TRIOLOGUE_URL in that file to change it`);
+  }
 
   const gatewayUrl = (get('GATEWAY_URL') ?? '').replace(/\/+$/, '');
-  if (!gatewayUrl) throw new Error(`GATEWAY_URL is required (e.g. https://opentriologue.ai/gateway); set it in ${envFile} (or as TRIOLOGUE_GATEWAY_URL in the environment)`);
+  if (!gatewayUrl) {
+    const ignored = nonEmpty(env.GATEWAY_URL) !== undefined ? '; a plain GATEWAY_URL in the environment was ignored, use TRIOLOGUE_GATEWAY_URL' : '';
+    throw new Error(`GATEWAY_URL is required (e.g. https://opentriologue.ai/gateway); set it in ${envFile} (or as TRIOLOGUE_GATEWAY_URL in the environment)${ignored}`);
+  }
   requireSecureUrl('GATEWAY_URL', gatewayUrl);
   const ignoredTokens = TOKEN_KEYS.filter((key) => nonEmpty(env[key]) !== undefined);
   if (ignoredTokens.length > 0) {

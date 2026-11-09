@@ -151,6 +151,8 @@ describe('the keys the file decides', () => {
     { key: 'ALLOW_AGENTS', a: 'yes', b: 'no', resultA: true, resultB: false, absent: false, read: (c) => c.allowAgents },
   ];
   const plainCases = cases.filter((c) => !c.key.startsWith('TRIOLOGUE_'));
+  // TRIOLOGUE_URL follows the gateway URL's source: its own describe below.
+  const envCases = cases.filter((c) => c.key !== 'TRIOLOGUE_URL');
 
   /** Load with `<key>=<fileValue>` in the file (unless undefined) and the given environment. */
   function load(key: string, fileValue: string | undefined, env: Record<string, string>): ChannelConfig {
@@ -177,7 +179,7 @@ describe('the keys the file decides', () => {
     expect(config.warnings).toEqual([]);
   });
 
-  it.each(cases)('$key: from TRIOLOGUE_<KEY> in the environment when the file lacks it', (c) => {
+  it.each(envCases)('$key: from TRIOLOGUE_<KEY> in the environment when the file lacks it', (c) => {
     const config = load(c.key, undefined, { [prefixed(c.key)]: c.a });
     expect(c.read(config)).toEqual(c.resultA);
     expect(config.warnings).toEqual([]);
@@ -204,7 +206,7 @@ describe('the keys the file decides', () => {
     expectAbsent(c, () => load(c.key, undefined, { [c.key]: c.a }));
   });
 
-  it.each(cases)('$key: an empty value counts as absent, in the file and in the environment', (c) => {
+  it.each(envCases)('$key: an empty value counts as absent, in the file and in the environment', (c) => {
     expect(c.read(load(c.key, '', { [prefixed(c.key)]: c.a }))).toEqual(c.resultA);
     expect(c.read(load(c.key, c.a, { [prefixed(c.key)]: '' }))).toEqual(c.resultA);
     expectAbsent(c, () => load(c.key, '', { [prefixed(c.key)]: '' }));
@@ -216,6 +218,93 @@ describe('the keys the file decides', () => {
     const config = load('ALLOW_AGENTS', 'yes', { GATEWAY_URL: 'https://shell.example/gateway', ALLOWED_SENDERS: 'someone', ALLOW_AGENTS: 'no' });
     expect(config.warnings.map((w) => w.split(' ')[0])).toEqual(['GATEWAY_URL', 'ALLOWED_SENDERS', 'ALLOW_AGENTS']);
     expect(config.gatewayUrl).toBe('https://base.example/gateway');
+  });
+});
+
+/**
+ * TRIOLOGUE_URL: the plain and the prefixed name coincide, so a shell export
+ * would win whenever the file lacks the key. Instead it follows where the
+ * gateway URL comes from. Winner, highest first: TRIOLOGUE_URL in the file;
+ * the file's gateway URL (derived), when the file sets GATEWAY_URL, with the
+ * environment's TRIOLOGUE_URL ignored and warned about; TRIOLOGUE_URL in the
+ * environment, only when the file has neither key; else derived from the
+ * gateway URL.
+ */
+describe('TRIOLOGUE_URL follows the source of GATEWAY_URL', () => {
+  const FILE_GATEWAY = 'https://file.example/gateway';
+  const ENV_GATEWAY = 'https://env.example/gateway';
+  const load = (fileText: string, env: Record<string, string>): ChannelConfig => {
+    const stateDir = tmpState();
+    writeEnv(stateDir, `BYOA_TOKEN=byoa_file\n${fileText}`);
+    return loadConfig({ CLAUDE_PLUGIN_DATA: stateDir, ...env });
+  };
+  const ignoredWarning = (config: ChannelConfig) => `TRIOLOGUE_URL in the environment ignored: ${path.join(config.stateDir, '.env')} sets GATEWAY_URL, so the Triologue URL is derived from it; set TRIOLOGUE_URL in that file to change it`;
+
+  it('the file sets GATEWAY_URL only: derived from it, and an environment TRIOLOGUE_URL is ignored with a warning that names the variable, not its value', () => {
+    const config = load(`GATEWAY_URL=${FILE_GATEWAY}\n`, { TRIOLOGUE_URL: 'https://shell.example' });
+    expect(config.triologueUrl).toBe('https://file.example');
+    expect(config.warnings).toEqual([ignoredWarning(config)]);
+    expect(config.warnings.join('\n')).not.toContain('shell.example');
+  });
+
+  it('the file sets GATEWAY_URL only and the environment has no TRIOLOGUE_URL, or an empty one: derived, no warning', () => {
+    expect(load(`GATEWAY_URL=${FILE_GATEWAY}\n`, {})).toMatchObject({ triologueUrl: 'https://file.example', warnings: [] });
+    expect(load(`GATEWAY_URL=${FILE_GATEWAY}\n`, { TRIOLOGUE_URL: '' })).toMatchObject({ triologueUrl: 'https://file.example', warnings: [] });
+  });
+
+  it('the file sets the prefixed TRIOLOGUE_GATEWAY_URL only: the same', () => {
+    const config = load(`TRIOLOGUE_GATEWAY_URL=${FILE_GATEWAY}\n`, { TRIOLOGUE_URL: 'https://shell.example' });
+    expect(config.triologueUrl).toBe('https://file.example');
+    expect(config.warnings).toEqual([ignoredWarning(config)]);
+  });
+
+  it('the file sets both: its TRIOLOGUE_URL wins over the environment, without a warning', () => {
+    const config = load(`GATEWAY_URL=${FILE_GATEWAY}\nTRIOLOGUE_URL=https://trio.example\n`, { TRIOLOGUE_URL: 'https://shell.example' });
+    expect(config.triologueUrl).toBe('https://trio.example');
+    expect(config.warnings).toEqual([]);
+  });
+
+  it('the file sets only an empty GATEWAY_URL: it counts as absent, so the environment pair is used', () => {
+    const config = load('GATEWAY_URL=\n', { TRIOLOGUE_GATEWAY_URL: ENV_GATEWAY, TRIOLOGUE_URL: 'https://shell.example' });
+    expect(config).toMatchObject({ gatewayUrl: ENV_GATEWAY, triologueUrl: 'https://shell.example', warnings: [] });
+  });
+
+  it('the file has neither key and both come from the environment: the environment TRIOLOGUE_URL is used', () => {
+    const config = load('', { TRIOLOGUE_GATEWAY_URL: ENV_GATEWAY, TRIOLOGUE_URL: 'https://shell.example' });
+    expect(config).toMatchObject({ gatewayUrl: ENV_GATEWAY, triologueUrl: 'https://shell.example', warnings: [] });
+  });
+
+  it('the file has neither key and only the gateway URL comes from the environment: derived from it', () => {
+    expect(load('', { TRIOLOGUE_GATEWAY_URL: ENV_GATEWAY })).toMatchObject({ triologueUrl: 'https://env.example', warnings: [] });
+  });
+
+  it('the file sets only TRIOLOGUE_URL and the gateway URL comes from the environment: the file wins', () => {
+    const config = load('TRIOLOGUE_URL=https://trio.example\n', { TRIOLOGUE_GATEWAY_URL: ENV_GATEWAY, TRIOLOGUE_URL: 'https://shell.example' });
+    expect(config).toMatchObject({ gatewayUrl: ENV_GATEWAY, triologueUrl: 'https://trio.example', warnings: [] });
+  });
+
+  it('a plain GATEWAY_URL in the environment is not a gateway source: its presence does not make the environment TRIOLOGUE_URL count', () => {
+    const config = load(`GATEWAY_URL=${FILE_GATEWAY}\n`, { GATEWAY_URL: 'https://shell.example/gateway', TRIOLOGUE_URL: 'https://shell.example' });
+    expect(config.triologueUrl).toBe('https://file.example');
+    expect(config.warnings).toHaveLength(2);
+  });
+});
+
+describe('the GATEWAY_URL is required error', () => {
+  it('says that a plain GATEWAY_URL in the environment was ignored, naming the variable and not its value', () => {
+    const stateDir = tmpState();
+    writeEnv(stateDir, 'BYOA_TOKEN=byoa_file\n');
+    const run = () => loadConfig({ CLAUDE_PLUGIN_DATA: stateDir, GATEWAY_URL: 'https://shell.example/gateway' });
+    expect(run).toThrow(/GATEWAY_URL is required/);
+    expect(run).toThrow('a plain GATEWAY_URL in the environment was ignored, use TRIOLOGUE_GATEWAY_URL');
+    expect(run).not.toThrow(/shell\.example/);
+  });
+
+  it('adds no such hint when no plain GATEWAY_URL is set, or an empty one', () => {
+    const stateDir = tmpState();
+    writeEnv(stateDir, 'BYOA_TOKEN=byoa_file\n');
+    expect(() => loadConfig({ CLAUDE_PLUGIN_DATA: stateDir })).not.toThrow(/ignored/);
+    expect(() => loadConfig({ CLAUDE_PLUGIN_DATA: stateDir, GATEWAY_URL: '' })).not.toThrow(/ignored/);
   });
 });
 
