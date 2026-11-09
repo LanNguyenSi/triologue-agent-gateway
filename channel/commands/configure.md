@@ -11,13 +11,16 @@ umask 077
 cat > "<CLAUDE_PLUGIN_DATA>/.env" <<'ENV'
 GATEWAY_URL=<gateway url>
 BYOA_TOKEN=<paste the byoa_… token from Triologue → Settings → My Agents>
-ALLOWED_SENDERS=<your Triologue username or user id>
+ALLOWED_SENDERS=<your Triologue user id, or user:<your username>>
 # ROOMS=<room id to bind at start, optional>
 ENV
 chmod 600 "<CLAUDE_PLUGIN_DATA>/.env"
 ```
 
 If the file already exists, tell the user which of the three keys it is missing (read it with `grep -c '^KEY=' …`, never print its contents), and that the channel refuses to start while the file is readable by others (`chmod 600` fixes it). Then remind them:
+
+- that a plain `ALLOWED_SENDERS` entry is a Triologue user id and matches only the sender's id, and that a username needs the `user:` prefix (`user:lan`); an entry written as a bare username matches nobody;
+- that the file wins over the environment for `GATEWAY_URL`, `TRIOLOGUE_URL`, `ALLOWED_SENDERS` and `ALLOW_AGENTS` (a plain `GATEWAY_URL` exported for the bridge is ignored), and that the gateway URL must be `https` unless it points at this machine;
 
 - to restart Claude Code with `--dangerously-load-development-channels plugin:triologue@<marketplace>` (or `--channels` once the plugin is on the allowed list);
 - that without `ALLOWED_SENDERS` every room message is dropped, and that a session receives only rooms it is bound to (`ROOMS` or `/triologue:connect`);

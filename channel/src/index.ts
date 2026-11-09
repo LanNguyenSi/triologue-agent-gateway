@@ -35,10 +35,11 @@ async function main(): Promise<void> {
   process.stdin.on('close', () => shutdown('stdin closed'));
 
   await server.start();
-  if (config.allowedSenders.size === 0) {
-    log('warn', 'ALLOWED_SENDERS is empty: every room message is dropped until a Triologue user id or username is listed');
+  const allowed = config.allowedSenders.ids.size + config.allowedSenders.usernames.size;
+  if (allowed === 0) {
+    log('warn', 'ALLOWED_SENDERS is empty: every room message is dropped until a Triologue user id (or user:<username>) is listed');
   }
-  log('info', `channel ready (gateway ${config.gatewayUrl}, allowed senders: ${config.allowedSenders.size}, rooms bound at start: ${config.rooms.length})`);
+  log('info', `channel ready (gateway ${config.gatewayUrl}, allowed senders: ${config.allowedSenders.ids.size} user ids, ${config.allowedSenders.usernames.size} usernames, rooms bound at start: ${config.rooms.length})`);
 }
 
 main().catch((err) => {

@@ -4,7 +4,9 @@
  * shared binding directory. Covers which session a bound room reaches (an
  * unbound session nothing, of several bound sessions the most recently bound
  * one, the next one after a disconnect or exit), verdicts for a standby
- * session's own prompt, and how a refused relay or send shows up.
+ * session's own prompt, a session whose first registration failed (it claims
+ * no room and opens no stream until the gateway knows it), and how a refused
+ * relay or send shows up.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,6 +18,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { BindingOrder } from '../src/bindings.js';
 import type { ChannelConfig } from '../src/config.js';
 import { GatewayError, type GatewayClient, type SseMessage } from '../src/gateway.js';
+import { parseAllowedSenders } from '../src/inbound.js';
 import { ChannelServer } from '../src/server.js';
 
 const ChannelNotification = z.object({
@@ -32,9 +35,16 @@ const ROOMS = [{ id: 'room-1', name: 'backend' }, { id: 'room-2', name: 'ops' }]
 class FakeGateway {
   sent: Array<{ roomId: string; content: string }> = [];
   failSend: GatewayError | null = null;
+  /** While set, a registration fails with it. */
+  failConnect: Error | null = null;
+  connects: Array<{ rooms?: string[] }> = [];
   constructor(readonly sessionId: string) {}
   async status() { return { agent: { id: 'a1', name: 'Claude', username: 'agent_claude' } }; }
-  async connectSession() { return { sessionId: this.sessionId, heartbeatSeconds: 30, ttlSeconds: 90 }; }
+  async connectSession(input: { rooms?: string[] }) {
+    this.connects.push(input);
+    if (this.failConnect) throw this.failConnect;
+    return { sessionId: this.sessionId, heartbeatSeconds: 30, ttlSeconds: 90 };
+  }
   async heartbeat() {}
   async presence() {}
   async bind(_s: string, rooms: string[]) { return { rooms, threads: [] }; }
@@ -52,6 +62,11 @@ interface Session {
   server: ChannelServer;
   client: Client;
   gateway: FakeGateway;
+  /** The session tag of every stream the server opened. */
+  streams: Array<{ sessionId: string | null }>;
+  /** The directory of the binding order, shared by the sessions of one machine. */
+  bindingDir: string;
+  pid: number;
   events: string[];
   verdicts: Array<{ request_id: string; behavior: string }>;
   logs: Array<[string, string]>;
@@ -70,28 +85,32 @@ afterEach(async () => {
 function machine() {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triologue-server-'));
   dirs.push(stateDir);
-  let pid = 500;
-  return async (rooms: string[] = []): Promise<Session> => {
-    pid += 1;
+  const bindingDir = path.join(stateDir, 'bindings', 'agent');
+  let nextPid = 500;
+  return async (rooms: string[] = [], opts: { failConnect?: Error; heartbeatSeconds?: number } = {}): Promise<Session> => {
+    nextPid += 1;
+    const pid = nextPid;
     const config: ChannelConfig = {
-      gatewayUrl: 'http://gw', triologueUrl: 'http://trio', byoaToken: 'byoa_test', allowedSenders: new Set(['user-lan']),
+      gatewayUrl: 'http://gw', triologueUrl: 'http://trio', byoaToken: 'byoa_test', allowedSenders: parseAllowedSenders(['user-lan']),
       allowAgents: false, rooms, runtime: 'claude', host: 'test-host', cwd: '/p', project: 'p', claudeSessionId: null,
-      stateDir, presencePort: 0, heartbeatSeconds: 30, logLevel: 'debug', warnings: [],
+      stateDir, presencePort: 0, heartbeatSeconds: opts.heartbeatSeconds ?? 30, logLevel: 'debug', warnings: [],
     };
     const gateway = new FakeGateway(`sess-${pid}`);
+    gateway.failConnect = opts.failConnect ?? null;
     const logs: Array<[string, string]> = [];
+    const streams: Session['streams'] = [];
     const server = new ChannelServer({
       config,
       gateway: gateway as unknown as GatewayClient,
       log: (level, message) => logs.push([level, message]),
-      createStream: () => ({ start: async () => undefined, stop: () => undefined }),
+      createStream: (o) => { streams.push({ sessionId: o.sessionId }); return { start: async () => undefined, stop: () => undefined }; },
       presenceListener: false,
-      bindingOrder: new BindingOrder({ dir: path.join(stateDir, 'bindings', 'agent'), pid, isAlive: () => true }),
+      bindingOrder: new BindingOrder({ dir: bindingDir, pid, isAlive: () => true }),
     });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     await server.start(serverSide);
     const client = new Client({ name: 'claude-code-fake', version: '0.0.0' }, { capabilities: { experimental: { 'claude/channel': {} } } });
-    const session: Session = { server, client, gateway, events: [], verdicts: [], logs };
+    const session: Session = { server, client, gateway, streams, bindingDir, pid, events: [], verdicts: [], logs };
     client.setNotificationHandler(ChannelNotification, async (n) => { session.events.push(n.params.content); });
     client.setNotificationHandler(PermissionVerdict, async (n) => { session.verdicts.push(n.params); });
     await client.connect(clientSide);
@@ -122,6 +141,21 @@ async function tool(s: Session, name: string, args: Record<string, unknown> = {}
 
 /** The clock in the binding order is the wall clock; keep binds a millisecond apart. */
 const later = () => new Promise((r) => setTimeout(r, 3));
+
+/** The pids of the sessions with an entry for the room in the order on this machine. */
+function entryPids(s: Session, room: string): number[] {
+  const dir = path.join(s.bindingDir, room);
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).map((name) => Number(name.split('-')[0])).sort((x, y) => x - y);
+}
+
+async function waitFor(check: () => boolean, label: string): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
 
 describe('which session a room reaches', () => {
   it('an unbound session receives nothing, also after disconnecting its last room', async () => {
@@ -220,6 +254,59 @@ describe('which session a room reaches', () => {
     expect(a.verdicts).toEqual([{ request_id: 'abcde', behavior: 'allow' }]);
     expect(b.verdicts).toEqual([]);
     expect([a.events, b.events]).toEqual([[], []]);
+  });
+});
+
+describe('a session the gateway does not know yet', () => {
+  const outage = new GatewayError('POST http://gw/byoa/sessions/connect -> 503 Service Unavailable', 503, null);
+
+  it('claims no room and opens no stream until a heartbeat registers it; then the stream carries the session tag and it answers', async () => {
+    const start = machine();
+    const a = await start(['room-1', 'room-2']);
+    await later();
+    const b = await start(['room-1'], { failConnect: outage, heartbeatSeconds: 0.05 });
+    // connect_room before the registration: bound for the session, claimed later.
+    expect((await tool(b, 'connect_room', { room: 'ops' })).body).toMatchObject({ ok: true, rooms: ['room-1', 'room-2'], answers: false });
+
+    expect(b.server.state.sessionId).toBeNull();
+    expect(b.streams).toEqual([]);
+    expect(entryPids(a, 'room-1')).toEqual([a.pid]);
+    expect(entryPids(a, 'room-2')).toEqual([a.pid]);
+    // Only A has a stream, and A still answers both rooms.
+    await fanOut([a], 'room-1', 'still A (backend)');
+    await fanOut([a], 'room-2', 'still A (ops)');
+    expect(a.events).toEqual(['still A (backend)', 'still A (ops)']);
+    expect((await tool(a, 'status')).body).toMatchObject({ answering: ['room-1', 'room-2'], standby: [] });
+    expect((await tool(b, 'status')).body).toMatchObject({ session: null, rooms: ['room-1', 'room-2'], answering: [] });
+    expect(b.logs).toContainEqual(['warn', expect.stringMatching(/^session registration failed, retrying with the next heartbeat: .*503/)]);
+
+    b.gateway.failConnect = null;
+    await waitFor(() => b.streams.length > 0, 'the stream after the registration');
+    expect(b.server.state.sessionId).toBe(`sess-${b.pid}`);
+    expect(b.streams).toEqual([{ sessionId: `sess-${b.pid}` }]);
+    // The gateway learned both bindings with the registration.
+    expect(b.gateway.connects.at(-1)).toMatchObject({ rooms: ['room-1', 'room-2'] });
+    expect(entryPids(a, 'room-1')).toEqual([a.pid, b.pid]);
+    expect(entryPids(a, 'room-2')).toEqual([a.pid, b.pid]);
+
+    await fanOut([a, b], 'room-1', 'now B (backend)');
+    await fanOut([a, b], 'room-2', 'now B (ops)');
+    expect(b.events).toEqual(['now B (backend)', 'now B (ops)']);
+    expect(a.events).toEqual(['still A (backend)', 'still A (ops)']);
+    // Several heartbeats later still one stream.
+    await new Promise((r) => setTimeout(r, 150));
+    expect(b.streams).toHaveLength(1);
+  });
+
+  it('with a gateway that has no sessions API it takes part at once, with an untagged stream', async () => {
+    const start = machine();
+    const a = await start(['room-1'], { failConnect: new GatewayError('POST http://gw/byoa/sessions/connect -> 404 Not Found', 404, null) });
+    expect(a.server.state.sessionId).toBeNull();
+    expect(a.streams).toEqual([{ sessionId: null }]);
+    expect(entryPids(a, 'room-1')).toEqual([a.pid]);
+    await fanOut([a], 'room-1', 'old gateway');
+    expect(a.events).toEqual(['old gateway']);
+    expect(a.logs).toContainEqual(['warn', expect.stringMatching(/^the gateway has no sessions API/)]);
   });
 });
 

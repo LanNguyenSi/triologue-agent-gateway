@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildMeta, decideInbound, metaValue, PERMISSION_REPLY_RE, type GateConfig, type RoomMessage } from '../src/inbound.js';
+import { buildMeta, decideInbound, metaValue, parseAllowedSenders, PERMISSION_REPLY_RE, type GateConfig, type RoomMessage } from '../src/inbound.js';
+
+const allow = (...entries: string[]) => parseAllowedSenders(entries);
 
 function msg(overrides: Partial<RoomMessage> = {}): RoomMessage {
   return {
@@ -9,7 +11,7 @@ function msg(overrides: Partial<RoomMessage> = {}): RoomMessage {
 }
 
 function cfg(overrides: Partial<GateConfig> = {}): GateConfig {
-  return { selfUsername: 'agent_claude_1234abcd', allowedSenders: new Set(['user-lan']), allowAgents: false, boundRooms: new Set(['room-1']), ...overrides };
+  return { selfUsername: 'agent_claude_1234abcd', allowedSenders: allow('user-lan'), allowAgents: false, boundRooms: new Set(['room-1']), ...overrides };
 }
 
 describe('decideInbound', () => {
@@ -27,20 +29,59 @@ describe('decideInbound', () => {
 
   it('drops its own messages, other agents by default, and senders off the allowlist', () => {
     expect(decideInbound(msg({ sender: 'agent_claude_1234abcd' }), cfg())).toEqual({ action: 'drop', reason: 'self' });
-    expect(decideInbound(msg({ senderType: 'AI', sender: 'lava', senderId: 'user-lava' }), cfg({ allowedSenders: new Set(['user-lava']) }))).toEqual({ action: 'drop', reason: 'ai-sender' });
+    expect(decideInbound(msg({ senderType: 'AI', sender: 'lava', senderId: 'user-lava' }), cfg({ allowedSenders: allow('user-lava') }))).toEqual({ action: 'drop', reason: 'ai-sender' });
     expect(decideInbound(msg({ sender: 'mallory', senderId: 'user-mallory' }), cfg())).toEqual({ action: 'drop', reason: 'sender-not-allowed' });
     // An empty allowlist lets nobody in (fail closed).
-    expect(decideInbound(msg(), cfg({ allowedSenders: new Set() })).action).toBe('drop');
+    expect(decideInbound(msg(), cfg({ allowedSenders: allow() })).action).toBe('drop');
   });
 
-  it('matches the allowlist by user id or username, case-insensitively, never by room', () => {
-    expect(decideInbound(msg({ senderId: null, sender: 'LAN' }), cfg({ allowedSenders: new Set(['lan']) })).action).toBe('deliver');
+  it('matches a plain entry against the sender id only, case-insensitively, never by room', () => {
     expect(decideInbound(msg({ senderId: 'USER-LAN', sender: 'someone' }), cfg()).action).toBe('deliver');
     expect(decideInbound(msg({ senderId: 'user-x', sender: 'x', room: 'user-lan' }), cfg())).toEqual({ action: 'drop', reason: 'sender-not-allowed' });
+    // Without a sender id a plain entry matches nothing.
+    expect(decideInbound(msg({ senderId: null, sender: 'user-lan' }), cfg())).toEqual({ action: 'drop', reason: 'sender-not-allowed' });
+  });
+
+  it('refuses a username that equals an allowed user id, for content and for verdicts', () => {
+    // Triologue ids are cuids, and a username may take the same shape.
+    const allowedId = 'cmh3k2x9a0000abcdefgh1234';
+    const byId = cfg({ allowedSenders: allow(allowedId) });
+    const impostor = { sender: allowedId, senderId: 'cmh3k2x9a0000zzzzzzzz9999' };
+    expect(decideInbound(msg({ ...impostor }), byId)).toEqual({ action: 'drop', reason: 'sender-not-allowed' });
+    expect(decideInbound(msg({ ...impostor, content: 'yes abcde' }), byId)).toEqual({ action: 'drop', reason: 'sender-not-allowed' });
+    expect(decideInbound(msg({ ...impostor, senderId: null, content: 'no abcde' }), byId)).toEqual({ action: 'drop', reason: 'sender-not-allowed' });
+    // The allowed user, by id, still passes, verdict included.
+    expect(decideInbound(msg({ sender: 'lan', senderId: allowedId, content: 'yes abcde' }), byId)).toEqual({ action: 'verdict', requestId: 'abcde', behavior: 'allow' });
+  });
+
+  it('matches a user: entry against the username only', () => {
+    const byName = cfg({ allowedSenders: allow('User:Lan') });
+    expect(decideInbound(msg({ sender: 'LAN', senderId: 'user-other' }), byName).action).toBe('deliver');
+    expect(decideInbound(msg({ sender: 'lan', senderId: null, content: 'yes abcde' }), byName)).toEqual({ action: 'verdict', requestId: 'abcde', behavior: 'allow' });
+    // A sender whose id is "lan" is not the user named lan.
+    expect(decideInbound(msg({ sender: 'mallory', senderId: 'lan' }), byName)).toEqual({ action: 'drop', reason: 'sender-not-allowed' });
+    expect(decideInbound(msg({ sender: 'mallory', senderId: 'lan', content: 'yes abcde' }), byName)).toEqual({ action: 'drop', reason: 'sender-not-allowed' });
+    // Nor is a sender whose id is the whole entry.
+    expect(decideInbound(msg({ sender: 'mallory', senderId: 'user:lan' }), byName)).toEqual({ action: 'drop', reason: 'sender-not-allowed' });
+  });
+
+  it('keeps ids and usernames apart in a mixed list', () => {
+    const mixed = cfg({ allowedSenders: allow('user-lan', 'user:lava') });
+    expect(decideInbound(msg({ sender: 'anyone', senderId: 'user-lan' }), mixed).action).toBe('deliver');
+    expect(decideInbound(msg({ sender: 'lava', senderId: 'user-unknown' }), mixed).action).toBe('deliver');
+    expect(decideInbound(msg({ sender: 'user-lan', senderId: 'user-unknown' }), mixed)).toEqual({ action: 'drop', reason: 'sender-not-allowed' });
+    expect(decideInbound(msg({ sender: 'mallory', senderId: 'lava' }), mixed)).toEqual({ action: 'drop', reason: 'sender-not-allowed' });
+    expect(decideInbound(msg({ sender: 'user-lan', senderId: 'lava', content: 'yes abcde' }), mixed)).toEqual({ action: 'drop', reason: 'sender-not-allowed' });
+  });
+
+  it('parseAllowedSenders: plain entries are ids, user: entries usernames, lower-cased, empty ones dropped', () => {
+    const parsed = parseAllowedSenders([' CMH3K2X9A ', 'user: Lan ', 'USER:lava', 'user:', '  ']);
+    expect([...parsed.ids]).toEqual(['cmh3k2x9a']);
+    expect([...parsed.usernames]).toEqual(['lan', 'lava']);
   });
 
   it('allows other agents when configured', () => {
-    expect(decideInbound(msg({ senderType: 'AI', sender: 'lava', senderId: 'user-lava' }), cfg({ allowAgents: true, allowedSenders: new Set(['user-lava']) })).action).toBe('deliver');
+    expect(decideInbound(msg({ senderType: 'AI', sender: 'lava', senderId: 'user-lava' }), cfg({ allowAgents: true, allowedSenders: allow('user-lava') })).action).toBe('deliver');
   });
 
   it('only bound rooms pass', () => {
@@ -80,7 +121,7 @@ describe('decideInbound', () => {
   });
 
   it('never takes a verdict from an agent, even an allowed one', () => {
-    const agents = cfg({ allowAgents: true, allowedSenders: new Set(['user-lava']) });
+    const agents = cfg({ allowAgents: true, allowedSenders: allow('user-lava') });
     expect(decideInbound(msg({ content: 'yes abcde', senderType: 'AI', sender: 'lava', senderId: 'user-lava' }), agents)).toEqual({ action: 'drop', reason: 'verdict-from-agent' });
     expect(decideInbound(msg({ content: 'hello', senderType: 'AI', sender: 'lava', senderId: 'user-lava' }), agents).action).toBe('deliver');
   });

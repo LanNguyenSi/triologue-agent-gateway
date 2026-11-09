@@ -3,8 +3,9 @@
  * the Claude Code session. Pure functions, no IO.
  *
  * Order: the agent's own messages are dropped; messages by other agents are
- * dropped unless allowed; the sender must be on the allowlist (by Triologue
- * user id or username, never by room); only rooms this session is bound to
+ * dropped unless allowed; the sender must be on the allowlist (a plain entry
+ * is a Triologue user id and matches the sender id only, a `user:<name>` entry
+ * matches the username only; never by room); only rooms this session is bound to
  * pass (an unbound session receives nothing); a `yes <id>` / `no <id>` from
  * an allowed human becomes a permission verdict and never reaches the model
  * (from an agent it is dropped); a room that a more recently bound session
@@ -25,11 +26,40 @@ export interface RoomMessage {
   eventId?: number | string;
 }
 
+/**
+ * Who may push into the session, lower-cased. User ids and usernames are kept
+ * apart: Triologue ids are cuids and a username may look like one, so a
+ * username equal to an allowed id must not pass.
+ */
+export interface AllowedSenders {
+  /** Matched against the message's sender id only. */
+  ids: Set<string>;
+  /** Matched against the sender's username only. */
+  usernames: Set<string>;
+}
+
+/** The prefix of an ALLOWED_SENDERS entry that names a username instead of a user id. */
+export const USERNAME_ENTRY_PREFIX = 'user:';
+
+/** ALLOWED_SENDERS entries: `user:<username>` is a username, any other entry a user id. */
+export function parseAllowedSenders(entries: string[]): AllowedSenders {
+  const allowed: AllowedSenders = { ids: new Set(), usernames: new Set() };
+  for (const raw of entries) {
+    const entry = raw.trim().toLowerCase();
+    if (entry.startsWith(USERNAME_ENTRY_PREFIX)) {
+      const username = entry.slice(USERNAME_ENTRY_PREFIX.length).trim();
+      if (username.length > 0) allowed.usernames.add(username);
+    } else if (entry.length > 0) {
+      allowed.ids.add(entry);
+    }
+  }
+  return allowed;
+}
+
 export interface GateConfig {
   /** Own username, to drop echoes of what this session sent. */
   selfUsername: string;
-  /** Lower-cased user ids and usernames allowed to push into the session. */
-  allowedSenders: Set<string>;
+  allowedSenders: AllowedSenders;
   allowAgents: boolean;
   /** Rooms the session is bound to; nothing else reaches it, an empty set means nothing at all. */
   boundRooms: Set<string>;
@@ -52,10 +82,11 @@ export const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i;
 export const META_KEY_RE = /^[A-Za-z0-9_]+$/;
 
 export function isAllowedSender(message: RoomMessage, config: GateConfig): boolean {
-  const candidates = [message.senderId, message.sender]
-    .filter((v): v is string => typeof v === 'string' && v.length > 0)
-    .map((v) => v.toLowerCase());
-  return candidates.some((c) => config.allowedSenders.has(c));
+  const { ids, usernames } = config.allowedSenders;
+  const senderId = typeof message.senderId === 'string' ? message.senderId.toLowerCase() : '';
+  if (senderId.length > 0 && ids.has(senderId)) return true;
+  const username = message.sender.toLowerCase();
+  return username.length > 0 && usernames.has(username);
 }
 
 export function decideInbound(message: RoomMessage, config: GateConfig): GateDecision {

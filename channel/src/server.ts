@@ -117,6 +117,10 @@ export class ChannelServer {
   private heartbeatSeconds: number;
   private presenceClose: (() => Promise<void>) | null = null;
   private stopped = false;
+  /** start() has set everything up. */
+  private started = false;
+  /** The session takes part: its rooms are in the order on this machine and its stream is open (activate). */
+  private active = false;
   /** The gateway has no sessions API (404 on connect): do not keep trying. */
   private sessionsUnsupported = false;
   private registering: Promise<boolean> | null = null;
@@ -174,8 +178,6 @@ export class ChannelServer {
     }
 
     await this.register(null);
-    // Rooms bound at start are bound now, in this session's order too.
-    for (const room of this.state.boundRooms) this.bindings.bind(room);
     this.bindingTimer = setInterval(() => this.bindings.refresh(), BINDING_REFRESH_MS);
     this.bindingTimer.unref?.();
     if (!this.sessionsUnsupported) {
@@ -200,6 +202,27 @@ export class ChannelServer {
       }
     }
 
+    this.started = true;
+    // When the registration failed, the heartbeat retries it and activates the session then.
+    this.activate();
+  }
+
+  /**
+   * Take part once the gateway knows the session: claim the bound rooms in
+   * the order on this machine (rooms bound at start, and any connect_room
+   * made before) and open the stream tagged with the session. Not before:
+   * the gateway leaves an untagged stream out of the delivery and the replay
+   * of a bound room, so a session without a gateway session id would push an
+   * older bound session aside and never get the room's messages itself. A
+   * gateway without the sessions API tags nothing and sends every room to
+   * every stream, so there the session takes part at once.
+   */
+  private activate(): void {
+    if (!this.started || this.active || this.stopped) return;
+    if (!this.state.sessionId && !this.sessionsUnsupported) return;
+    this.active = true;
+    for (const room of this.state.boundRooms) this.bindings.bind(room);
+    const { config, log } = this.deps;
     const createStream = this.deps.createStream ?? ((opts) => new SseStream(opts));
     this.stream = createStream({
       gatewayUrl: config.gatewayUrl,
@@ -267,6 +290,8 @@ export class ChannelServer {
         }
       } else {
         log('info', `session ${session.sessionId} registered (heartbeat every ${this.heartbeatSeconds}s)`);
+        // A first registration that failed at start and succeeded with a heartbeat.
+        this.activate();
       }
       return true;
     } catch (err) {
@@ -274,6 +299,7 @@ export class ChannelServer {
         // An older gateway without the sessions API still streams and sends.
         this.sessionsUnsupported = true;
         log('warn', `the gateway has no sessions API, running without a session: ${errorMessage(err)}`);
+        this.activate();
       } else {
         log('warn', `session registration failed${previous ? '' : ', retrying with the next heartbeat'}: ${errorMessage(err)}`);
       }
@@ -542,7 +568,8 @@ export class ChannelServer {
       // Also when already bound: binding again makes this the session that answers the room.
       this.state.boundRooms.add(room.id);
       this.state.activeRoom = room.id;
-      this.bindings.bind(room.id);
+      // Before the gateway knows the session, the room is claimed when it does (activate).
+      if (this.active) this.bindings.bind(room.id);
       return { ok: true, room, rooms: [...this.state.boundRooms], answers: this.bindings.answers(room.id) };
     }
     this.state.boundRooms.delete(room.id);

@@ -10,11 +10,16 @@
  *
  * The order lives in the state directory, so it covers the sessions that
  * share it (same user, same machine): one file per agent, room and session,
- * `<dir>/<roomId>/<instance>.json`, holding the bind time. A process writes
- * and removes only its own files. Another session's entry counts while its
- * process exists and it has been refreshed within BINDING_STALE_MS of the
- * newest entry of the room; so a session that crashed and whose pid was
- * reused stops counting once the live ones have refreshed past it.
+ * `<dir>/<roomId>/<instance>.json`, holding the bind time. The server writes
+ * a session's entries only once the gateway knows the session (server.ts,
+ * activate). A process writes only its own files and removes its own on
+ * unbind and exit; reading a room's entries, it also removes those of a
+ * process that no longer exists and those under its own pid with another
+ * instance id (a dead predecessor whose pid came round again). Another
+ * session's entry counts while its process exists and it has been refreshed
+ * within BINDING_STALE_MS of the newest entry of the room; so a session that
+ * crashed and whose pid was reused stops counting once the live ones have
+ * refreshed past it.
  */
 
 import crypto from 'node:crypto';

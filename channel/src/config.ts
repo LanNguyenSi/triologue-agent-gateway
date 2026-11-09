@@ -2,23 +2,35 @@
  * Configuration of the channel server. Zero-dependency on purpose: the server
  * runs on the user's machine as a Claude Code subprocess.
  *
- * Sources, later wins: `${STATE_DIR}/.env` (`KEY=value` lines, `#` comments),
- * then the process environment. In the environment every key is also read
- * with a `TRIOLOGUE_` prefix (`TRIOLOGUE_GATEWAY_URL`), and the keys whose
- * plain names other programs use too (`HOST`, `PROJECT`, `ROOMS`, `RUNTIME`,
- * `LOG_LEVEL`) are read from the environment only with the prefix, so a shell
- * that exports `HOST=0.0.0.0` does not change what the session reports.
- * The token is the exception: it is read from the file only, never from the
- * environment (Claude Code hands its whole environment to every stdio server),
- * and the file must not be readable or writable by anyone but its owner.
+ * Sources: `${STATE_DIR}/.env` (`KEY=value` lines, `#` comments) and the
+ * process environment. In the environment every key is also read with a
+ * `TRIOLOGUE_` prefix (`TRIOLOGUE_GATEWAY_URL`). Three groups:
+ *
+ *   - The keys that decide where the token is sent and who may command the
+ *     session (`GATEWAY_URL`, `TRIOLOGUE_URL`, `ALLOWED_SENDERS`,
+ *     `ALLOW_AGENTS`): the file wins; the environment counts only with the
+ *     prefix and only when the file lacks the key. A plain `GATEWAY_URL` in
+ *     the environment (bridge/ asks for one) is ignored with a warning.
+ *   - The keys whose plain names other programs use too (`HOST`, `PROJECT`,
+ *     `ROOMS`, `RUNTIME`, `LOG_LEVEL`): the environment wins, but only with
+ *     the prefix, so a shell that exports `HOST=0.0.0.0` does not change what
+ *     the session reports.
+ *   - The rest: the environment wins, with or without the prefix.
+ *
+ * The token is read from the file only, never from the environment (Claude
+ * Code hands its whole environment to every stdio server), and the file must
+ * not be readable or writable by anyone but its owner. A URL the token goes
+ * to must be https, or http to this machine.
  * STATE_DIR is `CLAUDE_PLUGIN_DATA` when Claude Code runs the server as a
  * plugin, else `~/.claude/channels/triologue`, like the official channel
- * plugins.
+ * plugins. It has to come from the environment, since it says where the file
+ * is; the file found there still has to pass the mode check.
  */
 
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { parseAllowedSenders, type AllowedSenders } from './inbound.js';
 
 export interface ChannelConfig {
   /** Gateway base URL, e.g. https://opentriologue.ai/gateway. */
@@ -29,9 +41,10 @@ export interface ChannelConfig {
   byoaToken: string;
   /**
    * Who may push messages into the session and answer permission prompts:
-   * Triologue user ids or usernames. Empty means nobody (fail closed).
+   * Triologue user ids (plain entries) and usernames (`user:<name>` entries).
+   * Empty means nobody (fail closed).
    */
-  allowedSenders: Set<string>;
+  allowedSenders: AllowedSenders;
   /** Deliver messages written by other agents (default: dropped). */
   allowAgents: boolean;
   /** Rooms to bind at start (ids); bindings can also be added with connect_room. */
@@ -58,6 +71,29 @@ export interface ChannelConfig {
 
 /** Keys other programs set in a shell too; from the environment they count only as `TRIOLOGUE_<KEY>`. */
 export const PREFIX_ONLY_IN_ENV = new Set(['HOST', 'PROJECT', 'ROOMS', 'RUNTIME', 'LOG_LEVEL']);
+
+/**
+ * Keys that decide where the token is sent and who may command the session:
+ * the file wins over the environment, and the environment counts only as
+ * `TRIOLOGUE_<KEY>` (for `TRIOLOGUE_URL` the name already has the prefix).
+ */
+export const FILE_FIRST = new Set(['GATEWAY_URL', 'TRIOLOGUE_URL', 'ALLOWED_SENDERS', 'ALLOW_AGENTS']);
+
+/** Hosts a plain-http URL may name: the token does not leave the machine there. */
+export const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+/** Refuse a URL the token would travel to in clear text: https, or http to this machine only. */
+export function requireSecureUrl(name: string, value: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${name} is not a valid URL`);
+  }
+  if (url.protocol === 'https:') return;
+  if (url.protocol === 'http:' && LOCAL_HOSTS.has(url.hostname)) return;
+  throw new Error(`${name} must be an https URL (plain http only to localhost, 127.0.0.1 or ::1): the token is sent there`);
+}
 
 /** Names under which a token in the environment is ignored (and reported). */
 export const TOKEN_KEYS = ['BYOA_TOKEN', 'TRIOLOGUE_BYOA_TOKEN'] as const;
@@ -142,16 +178,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, platform: NodeJ
   const fileValues = readEnvFile(envFile, platform);
   const warnings: string[] = [];
   const nonEmpty = (v: string | undefined): string | undefined => (v !== undefined && v !== '' ? v : undefined);
+  const prefixedName = (key: string): string => (key.startsWith('TRIOLOGUE_') ? key : `TRIOLOGUE_${key}`);
   const get = (key: string): string | undefined => {
-    const prefixed = key.startsWith('TRIOLOGUE_') ? key : `TRIOLOGUE_${key}`;
+    const prefixed = prefixedName(key);
+    const fromFile = nonEmpty(fileValues[prefixed]) ?? nonEmpty(fileValues[key]);
+    if (FILE_FIRST.has(key)) return fromFile ?? nonEmpty(env[prefixed]);
     return nonEmpty(env[prefixed])
       ?? (PREFIX_ONLY_IN_ENV.has(key) ? undefined : nonEmpty(env[key]))
-      ?? nonEmpty(fileValues[prefixed])
-      ?? nonEmpty(fileValues[key]);
+      ?? fromFile;
   };
+  for (const key of FILE_FIRST) {
+    if (key !== prefixedName(key) && nonEmpty(env[key]) !== undefined) {
+      warnings.push(`${key} in the environment ignored: set it in ${envFile} or as ${prefixedName(key)}`);
+    }
+  }
 
   const gatewayUrl = (get('GATEWAY_URL') ?? '').replace(/\/+$/, '');
-  if (!gatewayUrl) throw new Error('GATEWAY_URL is required (e.g. https://opentriologue.ai/gateway); set it in the environment or in ' + path.join(stateDir, '.env'));
+  if (!gatewayUrl) throw new Error(`GATEWAY_URL is required (e.g. https://opentriologue.ai/gateway); set it in ${envFile} (or as TRIOLOGUE_GATEWAY_URL in the environment)`);
+  requireSecureUrl('GATEWAY_URL', gatewayUrl);
   const ignoredTokens = TOKEN_KEYS.filter((key) => nonEmpty(env[key]) !== undefined);
   if (ignoredTokens.length > 0) {
     warnings.push(`${ignoredTokens.join(' and ')} in the environment ignored: the token is read only from ${envFile}`);
@@ -160,6 +204,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, platform: NodeJ
   if (!byoaToken) throw new Error('BYOA_TOKEN is required; put it in ' + envFile + ' with mode 600 (see /triologue:configure)');
 
   const triologueUrl = (get('TRIOLOGUE_URL') ?? gatewayUrl.replace(/\/gateway$/, '')).replace(/\/+$/, '');
+  // The room list is fetched with the token too.
+  requireSecureUrl('TRIOLOGUE_URL', triologueUrl);
   const cwd = nonEmpty(env.CLAUDE_PROJECT_DIR) ?? process.cwd();
   const heartbeatSeconds = Number(get('HEARTBEAT_SECONDS') ?? '30');
   const presencePort = Number(get('PRESENCE_PORT') ?? '0');
@@ -168,7 +214,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, platform: NodeJ
     gatewayUrl,
     triologueUrl,
     byoaToken,
-    allowedSenders: new Set(parseList(get('ALLOWED_SENDERS')).map((s) => s.toLowerCase())),
+    allowedSenders: parseAllowedSenders(parseList(get('ALLOWED_SENDERS'))),
     allowAgents: parseBool(get('ALLOW_AGENTS'), false),
     rooms: parseList(get('ROOMS')),
     runtime: get('RUNTIME') ?? 'claude',
