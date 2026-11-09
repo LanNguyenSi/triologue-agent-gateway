@@ -1,0 +1,8 @@
+{
+  "name": "triologue",
+  "version": "0.1.0",
+  "description": "Triologue as a channel: messages of the rooms you bind reach this Claude Code session, replies go back to the room, permission prompts can be answered from the room, and the room sees what the session is doing. In auto and acceptEdits mode room messages can run tools without an approval; see the README.",
+  "author": { "name": "LanNguyenSi" },
+  "homepage": "https://github.com/LanNguyenSi/triologue-agent-gateway/tree/master/channel",
+  "keywords": ["channel", "triologue", "chat"]
+}

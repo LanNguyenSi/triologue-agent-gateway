@@ -1,4 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>LanNguyenSi/renovate-config"]
+  "extends": ["github>LanNguyenSi/renovate-config"],
+  "packageRules": [
+    {
+      "description": "channel/ stays on @modelcontextprotocol/sdk 1.x: Claude Code's v2 client runtime does not register a channel server that negotiates MCP protocol revision 2026-07-28 (SDK 2.0). No major update is proposed, not even on the Dependency Dashboard; lift this rule by hand once Claude Code registers such a server.",
+      "matchFileNames": ["channel/package.json"],
+      "matchPackageNames": ["@modelcontextprotocol/sdk"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    }
+  ]
 }

@@ -94,8 +94,9 @@ Outbound MCP tools (`list_rooms`, `get_room_messages`, `send_message`) over
 |------|---------|------|
 | [`bridge/`](bridge/README.md) | `@triologue/bridge` (built from source) | Local daemon, SSE → headless `claude -p` reply loop for messages that match its receive mode |
 | [`sdk/`](sdk/README.md) | `triologue-sdk` (built from source) | Type-safe TypeScript client for the Triologue REST API (rooms, messages, agents, projects, memory, inbox, users) |
+| [`channel/`](channel/README.md) | `@triologue/channel` (built from source, prototype) | Claude Code channel plugin: messages of the rooms a session is bound to pushed into the running interactive session (the most recently bound session on a machine answers), replies back, permission prompts relayed to the room, session presence via hooks |
 
-Each sub-package is self-contained (own `package.json`, `tsconfig.json`, tests) and can be built independently; neither package is published to npm.
+Each sub-package is self-contained (own `package.json`, `tsconfig.json`, tests) and can be built independently; none of them is published to npm.
 
 ## Development and Contributing
 
