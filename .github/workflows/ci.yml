@@ -19,7 +19,8 @@ jobs:
     strategy:
       matrix:
         # Root has no engine constraint, so cover Node 22 (production) and 24. The
-        # bridge steps below require Node >=22 (engines) and run only on 22.x.
+        # bridge steps below require Node >=22 (engines) and run only on 22.x;
+        # the channel steps run on both.
         node-version: [22.x, 24.x]
 
     steps:
@@ -231,29 +232,26 @@ jobs:
         working-directory: bridge
         run: npm run build
 
-      # channel requires Node >=22 (engines) like bridge; same 22.x-only leg.
+      # channel requires Node >=22 (engines), which both legs satisfy, so its
+      # steps run on 22.x and 24.x: dist/ is not committed, CI is where it is
+      # built.
       - name: Install channel dependencies
-        if: matrix.node-version == '22.x'
         working-directory: channel
         run: npm ci --no-audit --no-fund
 
       - name: Type check channel
-        if: matrix.node-version == '22.x'
         working-directory: channel
         run: npm run typecheck
 
       - name: Type check channel test files
-        if: matrix.node-version == '22.x'
         working-directory: channel
         run: npm run typecheck:test
 
       - name: Test channel with coverage
-        if: matrix.node-version == '22.x'
         working-directory: channel
         run: npm run test:coverage
 
       - name: Build channel
-        if: matrix.node-version == '22.x'
         working-directory: channel
         run: npm run build
 
