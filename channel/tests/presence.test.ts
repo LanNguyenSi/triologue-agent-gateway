@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  HOOK_SECRET_BYTES, HOOK_SECRET_HEADER, MAX_HOOK_BODY_BYTES, discoveryFile, secretMatches, startPresenceListener, statusForHook, writeDiscoveryFile,
+  HOOK_SECRET_BYTES, HOOK_SECRET_HEADER, MAX_HOOK_BODY_BYTES, discoveryFile, privateDir, secretMatches, startPresenceListener, statusForHook, writeDiscoveryFile,
 } from '../src/presence.js';
 
 describe('statusForHook', () => {
@@ -62,6 +62,28 @@ describe('writeDiscoveryFile', () => {
     writeDiscoveryFile(file, '{"port":2}');
     expect(fs.readFileSync(file, 'utf8')).toBe('{"port":2}');
     expect(fs.readdirSync(path.dirname(file))).toEqual(['7.json']);
+  });
+
+  it('narrows an existing directory that the group or others may enter to 700, and returns the old mode', () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triologue-discovery-'));
+    dirs.push(stateDir);
+    const dir = path.join(stateDir, 'sessions');
+    for (const wide of [0o755, 0o750, 0o705, 0o777]) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.chmodSync(dir, wide);
+      expect(privateDir(dir)).toBe(wide);
+      expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+    }
+    // Already private: left as it is.
+    expect(privateDir(dir)).toBeNull();
+    fs.chmodSync(dir, 0o500);
+    expect(privateDir(dir)).toBeNull();
+    expect(fs.statSync(dir).mode & 0o777).toBe(0o500);
+    fs.chmodSync(dir, 0o700);
+    // Windows has no such mode bits.
+    fs.chmodSync(dir, 0o755);
+    expect(privateDir(dir, 'win32')).toBeNull();
+    expect(fs.statSync(dir).mode & 0o777).toBe(0o755);
   });
 
   it('removes the temporary file when the rename fails', () => {
@@ -155,6 +177,36 @@ describe('startPresenceListener', () => {
     // A large Write payload within the cap still counts.
     expect((await post(listener.port, JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Write', tool_input: 'x'.repeat(200 * 1024) }), auth)).status).toBe(204);
     expect(onChange).toHaveBeenCalledTimes(1);
+    await listener.close();
+  });
+
+  it('narrows a sessions directory open to others before writing the file there, and says so', async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triologue-presence-'));
+    dirs.push(stateDir);
+    const dir = path.join(stateDir, 'sessions');
+    fs.mkdirSync(dir);
+    fs.chmodSync(dir, 0o777);
+    const log = vi.fn();
+    const listener = await startPresenceListener({ stateDir, claudePid: 6, onChange: vi.fn(), log });
+    expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+    expect(log).toHaveBeenCalledWith('warn', `${dir} was open to other users (mode 777); narrowed it to 700`);
+    expect(fs.existsSync(discoveryFile(stateDir, 6))).toBe(true);
+    await listener.close();
+  });
+
+  it('writes no discovery file into a directory it cannot narrow', async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'triologue-presence-'));
+    dirs.push(stateDir);
+    const dir = path.join(stateDir, 'sessions');
+    fs.mkdirSync(dir);
+    fs.chmodSync(dir, 0o777);
+    // Someone else's directory: chmod is refused.
+    const chmod = vi.spyOn(fs, 'chmodSync').mockImplementation(() => { throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }); });
+    const log = vi.fn();
+    const listener = await startPresenceListener({ stateDir, claudePid: 7, onChange: vi.fn(), log });
+    chmod.mockRestore();
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(log).toHaveBeenCalledWith('warn', expect.stringMatching(/the hooks cannot report presence: EPERM/));
     await listener.close();
   });
 
