@@ -308,6 +308,16 @@ describe('a session the gateway does not know yet', () => {
     expect(a.events).toEqual(['old gateway']);
     expect(a.logs).toContainEqual(['warn', expect.stringMatching(/^the gateway has no sessions API/)]);
   });
+
+  it('also when the gateway turns out to have no sessions API only at a heartbeat after a failed start', async () => {
+    const start = machine();
+    const a = await start(['room-1'], { failConnect: outage, heartbeatSeconds: 0.05 });
+    expect(a.streams).toEqual([]);
+    a.gateway.failConnect = new GatewayError('POST http://gw/byoa/sessions/connect -> 404 Not Found', 404, null);
+    await waitFor(() => a.streams.length > 0, 'the stream after the 404');
+    expect(a.streams).toEqual([{ sessionId: null }]);
+    expect(entryPids(a, 'room-1')).toEqual([a.pid]);
+  });
 });
 
 describe('refused relays and sends', () => {
