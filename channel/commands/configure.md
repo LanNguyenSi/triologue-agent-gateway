@@ -20,8 +20,7 @@ chmod 600 "<CLAUDE_PLUGIN_DATA>/.env"
 If the file already exists, tell the user which of the three keys it is missing (read it with `grep -c '^KEY=' …`, never print its contents), and that the channel refuses to start while the file is readable by others (`chmod 600` fixes it). Then remind them:
 
 - that a plain `ALLOWED_SENDERS` entry is a Triologue user id and matches only the sender's id, and that a username needs the `user:` prefix (`user:lan`); an entry written as a bare username matches nobody;
-- that the file wins over the environment for `GATEWAY_URL`, `TRIOLOGUE_URL`, `ALLOWED_SENDERS` and `ALLOW_AGENTS` (a plain `GATEWAY_URL` exported for the bridge is ignored), and that the gateway URL must be `https` unless it points at this machine;
-
+- that the file wins over the environment for `GATEWAY_URL`, `TRIOLOGUE_URL`, `ALLOWED_SENDERS` and `ALLOW_AGENTS` (a plain `GATEWAY_URL` exported for the bridge is ignored, and so is a `TRIOLOGUE_URL` exported in a shell while the file sets `GATEWAY_URL`: the Triologue URL then follows the file's gateway URL), and that the gateway URL must be `https` unless it points at this machine;
 - to restart Claude Code with `--dangerously-load-development-channels plugin:triologue@<marketplace>` (or `--channels` once the plugin is on the allowed list);
 - that without `ALLOWED_SENDERS` every room message is dropped, and that a session receives only rooms it is bound to (`ROOMS` or `/triologue:connect`);
 - that in auto mode and in acceptEdits mode a message from an allowed sender can make the session run tools without any approval; the default mode asks, and relays the prompt to the bound room;
