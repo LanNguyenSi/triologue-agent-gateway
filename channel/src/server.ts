@@ -277,6 +277,13 @@ export class ChannelServer {
         claudeSessionId: config.claudeSessionId,
         rooms: [...this.state.boundRooms],
       });
+      if (this.stopped) {
+        // stop() ran while this registration was in flight and found no
+        // session to end; end the late one now so it does not linger with
+        // its room bindings until the gateway's TTL sweeps it.
+        await gateway.endSession(session.sessionId).catch((err) => log('warn', `could not end session: ${errorMessage(err)}`));
+        return false;
+      }
       this.state.sessionId = session.sessionId;
       this.bindings.setSessionId(session.sessionId);
       this.heartbeatSeconds = Math.max(5, Math.min(config.heartbeatSeconds, session.heartbeatSeconds));
@@ -305,7 +312,7 @@ export class ChannelServer {
           clearInterval(this.heartbeatTimer);
           this.heartbeatTimer = null;
         }
-        log('warn', `the gateway has no sessions API, running without a session: ${errorMessage(err)}`);
+        log('warn', `the gateway has no sessions API, running without a session until this server restarts (restart it after a gateway upgrade, or if the 404 came from a proxy): ${errorMessage(err)}`);
         this.activate();
       } else {
         log('warn', `session registration failed${previous ? '' : ', retrying with the next heartbeat'}: ${errorMessage(err)}`);

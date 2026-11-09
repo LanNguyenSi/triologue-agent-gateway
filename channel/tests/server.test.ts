@@ -341,6 +341,8 @@ describe('a session the gateway does not know yet', () => {
     const start = machine();
     const a = await start(['room-1'], { failConnect: outage, heartbeatSeconds: 0.05 });
     let release: (() => void) | null = null;
+    const ended: string[] = [];
+    (a.gateway as unknown as { endSession: unknown }).endSession = async (id: string) => { ended.push(id); };
     (a.gateway as unknown as { connectSession: unknown }).connectSession = () => new Promise((resolve) => {
       release = () => resolve({ sessionId: 'late-session', heartbeatSeconds: 30, ttlSeconds: 90 });
     });
@@ -348,7 +350,8 @@ describe('a session the gateway does not know yet', () => {
     await a.server.stop();
     release!();
     await new Promise((r) => setTimeout(r, 50));
-    expect(a.server.state.sessionId).toBe('late-session');
+    expect(a.server.state.sessionId).toBeNull();
+    expect(ended).toEqual(['late-session']);
     expect(a.streams).toEqual([]);
     expect(entryPids(a, 'room-1')).toEqual([]);
   });
