@@ -11,21 +11,25 @@
  * The order lives in the state directory, so it covers the sessions that
  * share it (same user, same machine): one file per agent, room and session,
  * `<dir>/<roomId>/<instance>.json`, holding the bind time. The server writes
- * a session's entries only once the gateway knows the session (server.ts,
- * activate). A process writes only its own files and removes its own on
- * unbind and exit; reading a room's entries, it also removes those of a
- * process that no longer exists and those under its own pid with another
- * instance id (a dead predecessor whose pid came round again). Another
- * session's entry counts while its process exists and it has been refreshed
- * within BINDING_STALE_MS of the newest entry of the room; so a session that
- * crashed and whose pid was reused stops counting once the live ones have
- * refreshed past it.
+ * a session's entries only once the gateway knows the session, or at once
+ * against a gateway without the sessions API, where no gateway session ever
+ * exists (server.ts, activate). Both directories are kept at mode 0700; an
+ * existing one that others may enter is narrowed with a warning, and when that
+ * fails no entry is written there. A process writes only its own files and
+ * removes its own on unbind and exit; reading a room's entries, it also
+ * removes those of a process that no longer exists and those under its own
+ * pid with another instance id (a dead predecessor whose pid came round
+ * again). Another session's entry counts while its process exists and it has
+ * been refreshed within BINDING_STALE_MS of the newest entry of the room; so
+ * a session that crashed and whose pid was reused stops counting once the
+ * live ones have refreshed past it.
  */
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Log } from './gateway.js';
+import { privateDir } from './presence.js';
 
 /** How often a session touches its own entries. */
 export const BINDING_REFRESH_MS = 30_000;
@@ -189,7 +193,12 @@ export class BindingOrder {
     const entry: BindingEntry = { instance: this.instance, pid: this.pid, sessionId: this.sessionId, boundAt };
     const tmp = `${file}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     try {
-      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      // An existing directory keeps its mode under mkdir: narrow one that other
+      // users may enter, or write no entry (privateDir throws when it cannot).
+      for (const dir of [this.opts.dir, path.dirname(file)]) {
+        const narrowed = privateDir(dir);
+        if (narrowed !== null) this.opts.log?.('warn', `${dir} was open to other users (mode ${narrowed.toString(8).padStart(3, '0')}); narrowed it to 700`);
+      }
       fs.writeFileSync(tmp, JSON.stringify(entry), { mode: 0o600, flag: 'wx' });
       fs.renameSync(tmp, file);
     } catch (err) {

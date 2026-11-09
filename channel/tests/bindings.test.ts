@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BINDING_STALE_MS, BindingOrder, bindingDir, isProcessAlive } from '../src/bindings.js';
 
 const dirs: string[] = [];
@@ -226,6 +226,45 @@ describe('BindingOrder', () => {
     a.bind('room-1');
     expect(a.answers('room-1')).toBe(true);
     expect(warnings[0]).toMatch(/could not record the binding of room room-1/);
+  });
+
+  it('narrows an existing agent or room directory that others may enter to 700 before writing the entry, and says so', () => {
+    const dir = tmpDir();
+    const room = path.join(dir, 'room-1');
+    fs.mkdirSync(room);
+    fs.chmodSync(dir, 0o777);
+    fs.chmodSync(room, 0o775);
+    const warnings: string[] = [];
+    const a = new BindingOrder({ dir, log: (_level, message) => warnings.push(message) });
+    a.bind('room-1');
+    expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(room).mode & 0o777).toBe(0o700);
+    expect(warnings).toEqual([
+      `${dir} was open to other users (mode 777); narrowed it to 700`,
+      `${room} was open to other users (mode 775); narrowed it to 700`,
+    ]);
+    expect(fs.readdirSync(room)).toEqual([`${a.instance}.json`]);
+    // Already private: nothing more to say on the refresh.
+    a.refresh();
+    expect(warnings).toHaveLength(2);
+  });
+
+  it('writes no entry into a directory it cannot narrow, and says so', () => {
+    const dir = tmpDir();
+    const room = path.join(dir, 'room-1');
+    fs.mkdirSync(room);
+    fs.chmodSync(room, 0o777);
+    // Someone else's directory: chmod is refused.
+    const chmod = vi.spyOn(fs, 'chmodSync').mockImplementation(() => { throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' }); });
+    const warnings: string[] = [];
+    const a = new BindingOrder({ dir, log: (_level, message) => warnings.push(message) });
+    try {
+      a.bind('room-1');
+    } finally {
+      chmod.mockRestore();
+    }
+    expect(fs.readdirSync(room)).toEqual([]);
+    expect(warnings).toEqual([expect.stringMatching(/^could not record the binding of room room-1.*EPERM/)]);
   });
 
   it('keys the order by agent: a hash of the token, never the token itself', () => {
