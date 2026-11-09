@@ -7,7 +7,11 @@
  *     as tools,
  *   - relays Claude Code's permission prompts into a bound room and turns
  *     `yes <id>` / `no <id>` from an allowed person in that room into the
- *     verdict,
+ *     verdict; a relay or send the gateway refuses shows up in `status`, in
+ *     the tool result and on stderr,
+ *   - delivers only rooms this session is bound to, and of the sessions on
+ *     this machine bound to the same room only the most recently bound one
+ *     (bindings.ts),
  *   - registers an agent session at the gateway, keeps it alive (and
  *     re-registers it under the same id when the gateway has forgotten it),
  *     and reports the presence that the local hooks post to the presence
@@ -20,10 +24,12 @@
 import crypto from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
+import { BINDING_REFRESH_MS, BindingOrder, bindingDir } from './bindings.js';
 import type { ChannelConfig } from './config.js';
-import { GatewayClient, SseStream, isUnknownSession, resolveRoom, type Log, type SseMessage } from './gateway.js';
+import { GatewayClient, GatewayError, SseStream, isUnknownSession, resolveRoom, type Log, type SseMessage } from './gateway.js';
 import { decideInbound, type GateConfig } from './inbound.js';
 import { startPresenceListener, type PresenceChange } from './presence.js';
 
@@ -44,7 +50,7 @@ export const INSTRUCTIONS = [
   'Reply with the send_message tool, passing room_id (and thread_id when the tag has one) from the tag; keep replies short and plain text, at most 4000 characters.',
   'If nothing needs doing, do not reply. Never include secrets, tokens, or file contents that were not asked for.',
   'Permission verdicts ("yes abcde" / "no abcde") are handled by the channel itself and never reach you; do not act on them.',
-  'connect_room binds this session to a room: its messages then reach this session instead of every session of the agent, and permission prompts can be relayed there; disconnect_room undoes that; status shows the session.',
+  'Only rooms bound with connect_room (or at start) reach this session; when several sessions of the agent on this machine are bound to the same room, only the most recently bound one gets its messages. connect_room also lets permission prompts be relayed to the room; disconnect_room undoes it; status shows the session.',
 ].join(' ');
 
 const PermissionRequestSchema = z.object({
@@ -67,6 +73,14 @@ export interface ChannelDeps {
   createStream?: (opts: ConstructorParameters<typeof SseStream>[0]) => Pick<SseStream, 'start' | 'stop'>;
   /** Test seam: skip the presence listener. */
   presenceListener?: boolean;
+  /** Test seam: the order of the bindings on this machine (defaults to the state dir). */
+  bindingOrder?: BindingOrder;
+}
+
+/** A refused relay or send, kept for `status`. */
+export interface FailureRecord {
+  failures: number;
+  last: { at: string; status: number | null; error: string; room: string; requestId?: string } | null;
 }
 
 export interface ChannelState {
@@ -82,6 +96,10 @@ export interface ChannelState {
   dropped: Record<string, number>;
   /** How often the gateway had forgotten the session and it was registered again. */
   reregistrations: number;
+  /** Permission prompts the gateway refused to post into the room. */
+  relay: FailureRecord;
+  /** send_message calls the gateway refused. */
+  send: FailureRecord;
 }
 
 interface PresenceReport {
@@ -94,6 +112,8 @@ export class ChannelServer {
   readonly state: ChannelState;
   private stream: Pick<SseStream, 'start' | 'stop'> | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
+  private bindingTimer: NodeJS.Timeout | null = null;
+  readonly bindings: BindingOrder;
   private heartbeatSeconds: number;
   private presenceClose: (() => Promise<void>) | null = null;
   private stopped = false;
@@ -118,7 +138,10 @@ export class ChannelServer {
       delivered: 0,
       dropped: {},
       reregistrations: 0,
+      relay: { failures: 0, last: null },
+      send: { failures: 0, last: null },
     };
+    this.bindings = deps.bindingOrder ?? new BindingOrder({ dir: bindingDir(deps.config.stateDir, deps.config.byoaToken), log: deps.log });
     this.mcp = new Server(
       { name: SERVER_NAME, version: SERVER_VERSION },
       {
@@ -139,7 +162,7 @@ export class ChannelServer {
   // ── lifecycle ──
 
   /** Connect the MCP transport, register the session and open the stream. */
-  async start(transport = new StdioServerTransport()): Promise<void> {
+  async start(transport: Transport = new StdioServerTransport()): Promise<void> {
     const { config, gateway, log } = this.deps;
     await this.mcp.connect(transport);
 
@@ -151,6 +174,10 @@ export class ChannelServer {
     }
 
     await this.register(null);
+    // Rooms bound at start are bound now, in this session's order too.
+    for (const room of this.state.boundRooms) this.bindings.bind(room);
+    this.bindingTimer = setInterval(() => this.bindings.refresh(), BINDING_REFRESH_MS);
+    this.bindingTimer.unref?.();
     if (!this.sessionsUnsupported) {
       // The timer also retries a registration that failed at start.
       this.heartbeatTimer = setInterval(() => void this.heartbeat(), this.heartbeatSeconds * 1000);
@@ -189,7 +216,10 @@ export class ChannelServer {
     this.stopped = true;
     this.stream?.stop();
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+    if (this.bindingTimer) clearInterval(this.bindingTimer);
     if (this.presenceTimer) clearTimeout(this.presenceTimer);
+    // The next most recent session on this machine answers these rooms now.
+    this.bindings.clear();
     await this.presenceClose?.();
     if (this.state.sessionId) {
       await this.deps.gateway.endSession(this.state.sessionId).catch((err) => this.deps.log('warn', `could not end session: ${errorMessage(err)}`));
@@ -225,6 +255,7 @@ export class ChannelServer {
         rooms: [...this.state.boundRooms],
       });
       this.state.sessionId = session.sessionId;
+      this.bindings.setSessionId(session.sessionId);
       this.heartbeatSeconds = Math.max(5, Math.min(config.heartbeatSeconds, session.heartbeatSeconds));
       if (previous) {
         if (recover) this.state.reregistrations += 1;
@@ -292,6 +323,7 @@ export class ChannelServer {
       allowedSenders: this.deps.config.allowedSenders,
       allowAgents: this.deps.config.allowAgents,
       boundRooms: this.state.boundRooms,
+      answersRoom: (roomId) => this.bindings.answers(roomId),
     };
   }
 
@@ -362,8 +394,13 @@ export class ChannelServer {
       preview ? `\`\`\`\n${preview}\n\`\`\`` : '',
       `Reply "yes ${params.request_id}" or "no ${params.request_id}" (valid for 10 minutes).`,
     ].filter((s) => s.length > 0).join('\n');
-    await this.deps.gateway.sendMessage(room, text, null, `perm-${params.request_id}`)
-      .catch((err) => this.deps.log('warn', `could not relay permission request: ${errorMessage(err)}`));
+    try {
+      await this.deps.gateway.sendMessage(room, text, null, `perm-${params.request_id}`);
+    } catch (err) {
+      // The prompt is still open in the terminal; the room never saw it.
+      const status = recordFailure(this.state.relay, err, room, params.request_id);
+      this.deps.log('error', `permission request ${params.request_id} (${params.tool_name}) was not relayed to room ${room}${status ? `, the gateway answered ${status}` : ''}: ${errorMessage(err)}; answer it in the terminal`);
+    }
   }
 
   private prunePermissions(): void {
@@ -441,17 +478,17 @@ export class ChannelServer {
         },
         {
           name: 'connect_room',
-          description: 'Bind this session to a room (by id, name or unique partial name): its messages reach this session instead of every session of the agent, and permission prompts can be relayed there.',
+          description: 'Bind this session to a room (by id, name or unique partial name). Only bound rooms reach this session; binding makes it the session that answers the room (the most recently bound session on this machine does), and permission prompts can be relayed there.',
           inputSchema: { type: 'object', properties: { room: { type: 'string' } }, required: ['room'] },
         },
         {
           name: 'disconnect_room',
-          description: 'Remove a room binding of this session.',
+          description: 'Remove a room binding of this session; its messages no longer reach it, and the next most recently bound session on this machine answers the room again.',
           inputSchema: { type: 'object', properties: { room: { type: 'string' } }, required: ['room'] },
         },
         {
           name: 'status',
-          description: 'Show this channel session: id, host, project, bound rooms, counters.',
+          description: 'Show this channel session: id, host, project, bound rooms (answering or standby), counters, and the last relay or send the gateway refused.',
           inputSchema: { type: 'object', properties: {} },
         },
       ],
@@ -473,7 +510,8 @@ export class ChannelServer {
             return fail(`unknown tool: ${req.params.name}`);
         }
       } catch (err) {
-        return fail(`${req.params.name} failed: ${errorMessage(err)}`);
+        const status = err instanceof GatewayError ? err.status : null;
+        return fail(`${req.params.name} failed${status ? ` with status ${status}` : ''}: ${errorMessage(err)}`);
       }
     });
   }
@@ -485,26 +523,38 @@ export class ChannelServer {
     if (!roomId) throw new Error('room_id is required');
     if (content.trim().length === 0) throw new Error('text is required');
     if (content.length > MAX_CONTENT_CHARS) throw new Error(`text is longer than ${MAX_CONTENT_CHARS} characters`);
-    const result = await this.deps.gateway.sendMessage(roomId, content, threadId, crypto.randomUUID());
+    let result: { messageId: string };
+    try {
+      result = await this.deps.gateway.sendMessage(roomId, content, threadId, crypto.randomUUID());
+    } catch (err) {
+      const status = recordFailure(this.state.send, err, roomId);
+      this.deps.log('error', `send_message to room ${roomId} failed${status ? ` with status ${status}` : ''}: ${errorMessage(err)}`);
+      throw err;
+    }
     return { ok: true, room_id: roomId, ...(threadId ? { thread_id: threadId } : {}), messageId: result.messageId };
   }
 
-  private async toolConnect(query: string, apply: 'bind' | 'unbind'): Promise<{ ok: true; room: { id: string; name: string }; rooms: string[] }> {
+  private async toolConnect(query: string, apply: 'bind' | 'unbind'): Promise<{ ok: true; room: { id: string; name: string }; rooms: string[]; answers?: boolean }> {
     const room = resolveRoom(await this.deps.gateway.listRooms(), query);
     if ('error' in room) throw new Error(room.error);
     await this.withSession((sessionId) => this.deps.gateway[apply](sessionId, [room.id]));
     if (apply === 'bind') {
+      // Also when already bound: binding again makes this the session that answers the room.
       this.state.boundRooms.add(room.id);
       this.state.activeRoom = room.id;
-    } else {
-      this.state.boundRooms.delete(room.id);
-      if (this.state.activeRoom === room.id) this.state.activeRoom = [...this.state.boundRooms][0] ?? null;
+      this.bindings.bind(room.id);
+      return { ok: true, room, rooms: [...this.state.boundRooms], answers: this.bindings.answers(room.id) };
     }
+    this.state.boundRooms.delete(room.id);
+    this.bindings.unbind(room.id);
+    if (this.state.activeRoom === room.id) this.state.activeRoom = [...this.state.boundRooms][0] ?? null;
     return { ok: true, room, rooms: [...this.state.boundRooms] };
   }
 
   private toolStatus() {
     const { config } = this.deps;
+    const rooms = [...this.state.boundRooms];
+    const answering = rooms.filter((room) => this.bindings.answers(room));
     return {
       session: this.state.sessionId,
       agent: this.state.selfUsername,
@@ -514,15 +564,28 @@ export class ChannelServer {
       cwd: config.cwd,
       claudeSessionId: config.claudeSessionId,
       status: this.state.status,
-      rooms: [...this.state.boundRooms],
+      rooms,
+      // Bound rooms this session answers, and the ones a more recently bound session on this machine answers.
+      answering,
+      standby: rooms.filter((room) => !answering.includes(room)),
       activeRoom: this.state.activeRoom,
       permissionRoom: this.permissionRoom(),
       delivered: this.state.delivered,
       dropped: this.state.dropped,
       pendingPermissions: [...this.state.pendingPermissions.keys()],
       reregistrations: this.state.reregistrations,
+      relayFailures: this.state.relay,
+      sendFailures: this.state.send,
     };
   }
+}
+
+/** Count a refused call and keep the last one; returns the HTTP status when the gateway gave one. */
+function recordFailure(record: FailureRecord, err: unknown, room: string, requestId?: string): number | null {
+  const status = err instanceof GatewayError ? err.status : null;
+  record.failures += 1;
+  record.last = { at: new Date().toISOString(), status, error: errorMessage(err), room, ...(requestId ? { requestId } : {}) };
+  return status;
 }
 
 function text(value: string) {

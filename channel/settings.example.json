@@ -1,0 +1,5 @@
+{
+  "permissions": {
+    "allow": ["mcp__triologue-channel__send_message"]
+  }
+}

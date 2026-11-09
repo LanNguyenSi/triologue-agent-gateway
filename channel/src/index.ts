@@ -17,6 +17,7 @@ async function main(): Promise<void> {
   const log = (level: keyof typeof LEVELS, message: string) => {
     if (LEVELS[level] >= threshold) process.stderr.write(`[triologue-channel] ${level}: ${message}\n`);
   };
+  for (const warning of config.warnings) log('warn', warning);
   const gateway = new GatewayClient({ gatewayUrl: config.gatewayUrl, triologueUrl: config.triologueUrl, token: config.byoaToken, log });
   const server = new ChannelServer({ config, gateway, log });
 

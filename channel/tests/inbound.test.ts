@@ -9,7 +9,7 @@ function msg(overrides: Partial<RoomMessage> = {}): RoomMessage {
 }
 
 function cfg(overrides: Partial<GateConfig> = {}): GateConfig {
-  return { selfUsername: 'agent_claude_1234abcd', allowedSenders: new Set(['user-lan']), allowAgents: false, boundRooms: new Set(), ...overrides };
+  return { selfUsername: 'agent_claude_1234abcd', allowedSenders: new Set(['user-lan']), allowAgents: false, boundRooms: new Set(['room-1']), ...overrides };
 }
 
 describe('decideInbound', () => {
@@ -43,10 +43,25 @@ describe('decideInbound', () => {
     expect(decideInbound(msg({ senderType: 'AI', sender: 'lava', senderId: 'user-lava' }), cfg({ allowAgents: true, allowedSenders: new Set(['user-lava']) })).action).toBe('deliver');
   });
 
-  it('with room bindings only bound rooms pass', () => {
+  it('only bound rooms pass', () => {
     const bound = cfg({ boundRooms: new Set(['room-1']) });
     expect(decideInbound(msg(), bound).action).toBe('deliver');
     expect(decideInbound(msg({ room: 'room-2' }), bound)).toEqual({ action: 'drop', reason: 'room-not-bound' });
+  });
+
+  it('an unbound session receives nothing, not every room of the agent', () => {
+    const unbound = cfg({ boundRooms: new Set() });
+    expect(decideInbound(msg(), unbound)).toEqual({ action: 'drop', reason: 'room-not-bound' });
+    expect(decideInbound(msg({ room: 'room-2' }), unbound)).toEqual({ action: 'drop', reason: 'room-not-bound' });
+    // Not even a verdict: prompts go to bound rooms only.
+    expect(decideInbound(msg({ content: 'yes abcde' }), unbound)).toEqual({ action: 'drop', reason: 'room-not-bound' });
+  });
+
+  it('a bound room that a more recently bound session answers is dropped, but its verdicts still count here', () => {
+    const standby = cfg({ boundRooms: new Set(['room-1', 'room-2']), answersRoom: (room) => room === 'room-2' });
+    expect(decideInbound(msg(), standby)).toEqual({ action: 'drop', reason: 'answered-by-newer-session' });
+    expect(decideInbound(msg({ room: 'room-2' }), standby).action).toBe('deliver');
+    expect(decideInbound(msg({ content: 'no abcde' }), standby)).toEqual({ action: 'verdict', requestId: 'abcde', behavior: 'deny' });
   });
 
   it.each([

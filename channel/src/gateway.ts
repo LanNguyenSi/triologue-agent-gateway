@@ -45,6 +45,20 @@ export class GatewayError extends Error {
   }
 }
 
+/**
+ * The readable part of a refusal body: `error`, plus the gateway's `detail`
+ * (a `502` carries the upstream refusal there, for example Triologue's
+ * `Request failed with status code 429`) and a `retryAfter` when given.
+ */
+export function errorDetail(body: unknown, fallback: string): string {
+  if (!body || typeof body !== 'object' || !('error' in body)) return fallback;
+  const { error, detail, retryAfter } = body as { error: unknown; detail?: unknown; retryAfter?: unknown };
+  let text = String(error);
+  if (typeof detail === 'string' && detail.length > 0) text += ` (${detail})`;
+  if (typeof retryAfter === 'number') text += `, retry after ${retryAfter}s`;
+  return text;
+}
+
 /** The gateway answered 404 for a session it no longer has (expired, ended, or removed). */
 export function isUnknownSession(err: unknown): boolean {
   return err instanceof GatewayError && err.status === 404;
@@ -81,8 +95,7 @@ export class GatewayClient {
       try { parsed = JSON.parse(text); } catch { parsed = text; }
     }
     if (!res.ok) {
-      const detail = parsed && typeof parsed === 'object' && 'error' in parsed ? String((parsed as { error: unknown }).error) : res.statusText;
-      throw new GatewayError(`${method} ${url} -> ${res.status} ${detail}`, res.status, parsed);
+      throw new GatewayError(`${method} ${url} -> ${res.status} ${errorDetail(parsed, res.statusText)}`, res.status, parsed);
     }
     return parsed as T;
   }

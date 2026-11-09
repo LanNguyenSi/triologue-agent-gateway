@@ -4,10 +4,11 @@
  *
  * Order: the agent's own messages are dropped; messages by other agents are
  * dropped unless allowed; the sender must be on the allowlist (by Triologue
- * user id or username, never by room); with room bindings, only bound rooms
- * pass; a `yes <id>` / `no <id>` from an allowed human becomes a permission
- * verdict and never reaches the model (from an agent it is dropped);
- * everything else is delivered.
+ * user id or username, never by room); only rooms this session is bound to
+ * pass (an unbound session receives nothing); a `yes <id>` / `no <id>` from
+ * an allowed human becomes a permission verdict and never reaches the model
+ * (from an agent it is dropped); a room that a more recently bound session
+ * answers is dropped; everything else is delivered.
  */
 
 export interface RoomMessage {
@@ -30,8 +31,13 @@ export interface GateConfig {
   /** Lower-cased user ids and usernames allowed to push into the session. */
   allowedSenders: Set<string>;
   allowAgents: boolean;
-  /** Rooms the session is bound to; empty means every room the agent is in. */
+  /** Rooms the session is bound to; nothing else reaches it, an empty set means nothing at all. */
   boundRooms: Set<string>;
+  /**
+   * Whether this session answers a bound room, false when a more recently
+   * bound session does (see bindings.ts). Absent: every bound room.
+   */
+  answersRoom?: (roomId: string) => boolean;
 }
 
 export type GateDecision =
@@ -62,7 +68,7 @@ export function decideInbound(message: RoomMessage, config: GateConfig): GateDec
   if (!isAllowedSender(message, config)) {
     return { action: 'drop', reason: 'sender-not-allowed' };
   }
-  if (config.boundRooms.size > 0 && !config.boundRooms.has(message.room)) {
+  if (!config.boundRooms.has(message.room)) {
     return { action: 'drop', reason: 'room-not-bound' };
   }
   const verdict = PERMISSION_REPLY_RE.exec(message.content);
@@ -74,6 +80,11 @@ export function decideInbound(message: RoomMessage, config: GateConfig): GateDec
       requestId: verdict[2].toLowerCase(),
       behavior: verdict[1].toLowerCase().startsWith('y') ? 'allow' : 'deny',
     };
+  }
+  // Checked after the verdict: a session that no longer answers the room
+  // still takes the verdicts for the prompts it relayed there itself.
+  if (config.answersRoom && !config.answersRoom(message.room)) {
+    return { action: 'drop', reason: 'answered-by-newer-session' };
   }
   return { action: 'deliver', content: message.content, meta: buildMeta(message) };
 }

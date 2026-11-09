@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GatewayClient, GatewayError, parseSseFrame, resolveRoom } from '../src/gateway.js';
+import { GatewayClient, GatewayError, errorDetail, parseSseFrame, resolveRoom } from '../src/gateway.js';
 
 describe('parseSseFrame', () => {
   it('reads id, event and multi-line data, skipping comments', () => {
@@ -46,6 +46,18 @@ describe('GatewayClient', () => {
     const { gw } = client(() => ({ status: 404, body: { error: 'Unknown session' } }));
     await expect(gw.heartbeat('s1')).rejects.toMatchObject({ name: 'GatewayError', status: 404, message: expect.stringContaining('Unknown session') });
     expect(new GatewayError('x', 500, null)).toBeInstanceOf(Error);
+  });
+
+  it('carries the upstream refusal behind a 502 and a retry hint behind a 429 into the error text', async () => {
+    const { gw: relay } = client(() => ({ status: 502, body: { error: 'Failed to deliver message', detail: 'Request failed with status code 429' } }));
+    await expect(relay.sendMessage('room-1', 'hi')).rejects.toMatchObject({
+      status: 502,
+      message: 'POST http://gw/gateway/byoa/sse/messages -> 502 Failed to deliver message (Request failed with status code 429)',
+    });
+    const { gw: limited } = client(() => ({ status: 429, body: { error: 'RATE_LIMITED', retryAfter: 12 } }));
+    await expect(limited.sendMessage('room-1', 'hi')).rejects.toMatchObject({ status: 429, message: expect.stringContaining('429 RATE_LIMITED, retry after 12s') });
+    expect(errorDetail('plain text', 'Bad Gateway')).toBe('Bad Gateway');
+    expect(errorDetail({ error: 'x', detail: '' }, 'f')).toBe('x');
   });
 
   it('lists rooms from Triologue in either response shape', async () => {
