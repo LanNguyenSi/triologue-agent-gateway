@@ -297,7 +297,14 @@ export class ChannelServer {
     } catch (err) {
       if (!previous && isUnknownSession(err)) {
         // An older gateway without the sessions API still streams and sends.
+        // A 404 is final, whether it comes at start or at a heartbeat: no more
+        // registration attempts, so a later success cannot leave a registered
+        // session with the untagged stream opened here.
         this.sessionsUnsupported = true;
+        if (this.heartbeatTimer) {
+          clearInterval(this.heartbeatTimer);
+          this.heartbeatTimer = null;
+        }
         log('warn', `the gateway has no sessions API, running without a session: ${errorMessage(err)}`);
         this.activate();
       } else {

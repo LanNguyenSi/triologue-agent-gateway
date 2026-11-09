@@ -318,6 +318,50 @@ describe('a session the gateway does not know yet', () => {
     expect(a.streams).toEqual([{ sessionId: null }]);
     expect(entryPids(a, 'room-1')).toEqual([a.pid]);
   });
+
+  it('a 404 at a heartbeat is final: no further registration attempt, also when the gateway would now accept one, and one untagged stream', async () => {
+    const start = machine();
+    const a = await start(['room-1'], { failConnect: outage, heartbeatSeconds: 0.05 });
+    a.gateway.failConnect = new GatewayError('POST http://gw/byoa/sessions/connect -> 404 Not Found', 404, null);
+    await waitFor(() => a.streams.length > 0, 'the stream after the 404');
+    const connectsAt404 = a.gateway.connects.length;
+    // The gateway recovers: a registration now would succeed, but none is tried.
+    a.gateway.failConnect = null;
+    await new Promise((r) => setTimeout(r, 300));
+    expect(a.gateway.connects).toHaveLength(connectsAt404);
+    expect(a.server.state.sessionId).toBeNull();
+    // Several heartbeats later, still the one untagged stream and the one entry.
+    expect(a.streams).toEqual([{ sessionId: null }]);
+    expect(entryPids(a, 'room-1')).toEqual([a.pid]);
+    await fanOut([a], 'room-1', 'still answered');
+    expect(a.events).toEqual(['still answered']);
+  });
+
+  it('a registration that is still pending when the session stops opens no stream and claims no room', async () => {
+    const start = machine();
+    const a = await start(['room-1'], { failConnect: outage, heartbeatSeconds: 0.05 });
+    let release: (() => void) | null = null;
+    (a.gateway as unknown as { connectSession: unknown }).connectSession = () => new Promise((resolve) => {
+      release = () => resolve({ sessionId: 'late-session', heartbeatSeconds: 30, ttlSeconds: 90 });
+    });
+    await waitFor(() => release !== null, 'the registration in flight');
+    await a.server.stop();
+    release!();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(a.server.state.sessionId).toBe('late-session');
+    expect(a.streams).toEqual([]);
+    expect(entryPids(a, 'room-1')).toEqual([]);
+  });
+
+  it('activating twice opens one stream and writes the entries once', async () => {
+    const start = machine();
+    const a = await start(['room-1']);
+    expect(a.streams).toHaveLength(1);
+    const before = entryPids(a, 'room-1');
+    (a.server as unknown as { activate(): void }).activate();
+    expect(a.streams).toHaveLength(1);
+    expect(entryPids(a, 'room-1')).toEqual(before);
+  });
 });
 
 describe('refused relays and sends', () => {
