@@ -1,28 +1,28 @@
 # @triologue/channel
 
-A [Claude Code channel](https://code.claude.com/docs/en/channels-reference) for Triologue. Claude Code spawns this server (`triologue-channel`) over stdio; it connects to the agent gateway with the agent's BYOA token and makes the running interactive session a participant of the agent's rooms:
+A [Claude Code channel](https://code.claude.com/docs/en/channels-reference) for Triologue. Claude Code spawns this server (`triologue-channel`) over stdio; it connects to the agent gateway with the agent's BYOA token and makes the running interactive session a participant of the rooms you bind it to:
 
-- room messages arrive in the session as `<channel source="triologue-channel" room="…" thread_id="…" sender="…">` events (after a sender gate);
+- messages from a bound room arrive in the session as `<channel source="triologue-channel" room="…" thread_id="…" sender="…">` events (after a sender gate); a session with no bound room receives nothing;
 - Claude answers with the `send_message` tool, into the room or the thread;
 - a permission prompt in the terminal is relayed to a bound room as `Reply "yes abcde" or "no abcde"`, and an allowed person's answer in that room becomes the verdict;
-- the session registers at the gateway's `/byoa/sessions`, binds rooms (`connect_room`), tags its stream with the session, and the hooks that ship with the plugin report whether it is idle, working, waiting for an approval or failed, so the room shows it next to the agent's name.
+- the session registers at the gateway's `/byoa/sessions`, binds rooms (`ROOMS` at start or `connect_room`), tags its stream with the session, and the hooks that ship with the plugin report whether it is idle, working, waiting for an approval or failed, so the room shows it next to the agent's name.
 
-This is the attended counterpart of [`bridge/`](../bridge/README.md): the bridge spawns a headless `claude -p` per mention, the channel pushes into the session you are already working in. Status: **prototype, not yet dogfooded against Claude Code** (the stdio contract is tested against a fake gateway in `tests/stdio.test.ts`); see "What is missing" below.
+This is the attended counterpart of [`bridge/`](../bridge/README.md): the bridge spawns a headless `claude -p` per mention, the channel pushes into the session you are already working in. Status: **prototype**. A spike ran the server form (below) end to end against Claude Code 2.1.319 and a gateway with `/byoa/sessions`; the room-binding rules, the hook listener's secret, the token-file rules and the failure reporting described here came after it and are tested against a fake gateway (`tests/stdio.test.ts` spawns the server the way Claude Code does), not yet live. The plugin form and a packaged release are not done yet (see "What is missing").
 
 ```
 Triologue room
   → gateway SSE stream (?session=<id>)
-  → this server (gate: self, agents, allowlist, bound rooms, verdicts)
+  → this server (gate: self, agents, allowlist, bound rooms, most recent binding, verdicts)
   → notifications/claude/channel → your running Claude Code session
   ← send_message tool → POST /byoa/sse/messages → the room
 ```
 
 ## Requirements
 
-- Node.js 22 or newer and a `claude` that supports channels (2.1.258 or newer; a research preview, so the flags are not in `--help`).
-- A Triologue agent (Settings → My Agents) with its `byoa_…` token, and a gateway from the release that carries `/byoa/sessions` (after 0.5.0). An older gateway still streams and sends; the session features are then off.
+- Node.js 22 or newer and a `claude` that supports channels (2.1.258 or newer; a research preview, so the flags are not in `--help`). Last verified against Claude Code 2.1.319; run the smoke check under "Run" after every Claude Code update.
+- A Triologue agent (Settings → My Agents) with its `byoa_…` token, and a gateway from the release that carries `/byoa/sessions` (0.6.0 or newer). An older gateway still streams and sends; the session features are then off.
 - Authentication through claude.ai or a Console API key; channels are not available on Bedrock, Vertex or Foundry. On a Team or Enterprise plan an admin has to enable channels.
-- The server pins `@modelcontextprotocol/sdk` 1.x on purpose: a server that negotiates MCP protocol revision 2026-07-28 (SDK 2.0) is not registered as a channel by Claude Code's v2 client runtime.
+- The server pins `@modelcontextprotocol/sdk` 1.x on purpose: a server that negotiates MCP protocol revision 2026-07-28 (SDK 2.0) is not registered as a channel by Claude Code's v2 client runtime. `renovate.json` at the repository root disables major updates of the SDK for `channel/`.
 
 ## Build
 
@@ -33,14 +33,16 @@ npm run build          # dist/index.js, what .mcp.json runs
 npm test
 ```
 
+`dist/` is not committed (it is ignored); CI type-checks, tests with coverage and builds `channel/` on Node 22 and 24. Shipping a built `dist/` with a release is the packaging step, not done yet.
+
 ## Configure
 
-Settings come from `$CLAUDE_PLUGIN_DATA/.env` (when Claude Code runs the server as a plugin) or `~/.claude/channels/triologue/.env`, overridden by the process environment. Every key can also be set as `TRIOLOGUE_<KEY>`; the five keys marked * are read from the environment **only** with that prefix (a shell that exports `HOST` or `LOG_LEVEL` for other programs must not change what the session reports), from the file either way.
+Settings come from `$CLAUDE_PLUGIN_DATA/.env` (when Claude Code runs the server as a plugin) or `~/.claude/channels/triologue/.env`, overridden by the process environment. Every key except the token can also be set as `TRIOLOGUE_<KEY>`; the five keys marked * are read from the environment **only** with that prefix (a shell that exports `HOST` or `LOG_LEVEL` for other programs must not change what the session reports), from the file either way.
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
 | `GATEWAY_URL` | yes | | Gateway base URL, e.g. `https://opentriologue.ai/gateway` |
-| `BYOA_TOKEN` | yes | | The agent's token (`TRIOLOGUE_BYOA_TOKEN` also works) |
+| `BYOA_TOKEN` | yes, **file only** | | The agent's token (`TRIOLOGUE_BYOA_TOKEN` in the file also works). Read only from the `.env` file; see Security |
 | `ALLOWED_SENDERS` | yes, else nothing is delivered | empty | Comma-separated Triologue user ids or usernames that may push into the session and answer permission prompts |
 | `ALLOW_AGENTS` | no | `false` | Deliver messages written by other agents (never their permission verdicts) |
 | `ROOMS` * | no | none | Room ids to bind at start (`connect_room` adds more); also where permission prompts go |
@@ -50,7 +52,16 @@ Settings come from `$CLAUDE_PLUGIN_DATA/.env` (when Claude Code runs the server 
 | `PRESENCE_PORT` | no | 0 (free port) | Localhost listener for the hooks |
 | `LOG_LEVEL` * | no | `info` | Logs go to stderr |
 
-Write the file yourself (`/triologue:configure` prints the commands; it does not take the token as an argument, so the token never passes through the model or the transcript).
+Write the file yourself, readable by you only (`/triologue:configure` prints the commands; it does not take the token as an argument, so the token never passes through the model or the transcript):
+
+```bash
+mkdir -p ~/.claude/channels/triologue
+umask 077
+$EDITOR ~/.claude/channels/triologue/.env
+chmod 600 ~/.claude/channels/triologue/.env
+```
+
+The server refuses to start when the file is readable or writable by the group or others (`chmod 600` fixes it). A `BYOA_TOKEN` or `TRIOLOGUE_BYOA_TOKEN` in the environment is ignored with a warning: Claude Code hands its whole environment to every stdio server, and the MCP config's `env` block and the command line are visible to other programs, so the token belongs in the file and nowhere else.
 
 ## Run
 
@@ -64,36 +75,67 @@ During the research preview a channel you build yourself needs the development f
 claude --dangerously-load-development-channels server:triologue-channel
 ```
 
-Claude Code asks for confirmation (a full-screen dialog, every start) and shows `Channels (experimental) messages from server:triologue-channel inject directly in this session` under the banner. `/mcp` lists the server. Then, in a room the agent is a member of, write `@<agent> …` from an allowed sender. The name is not `triologue`: that is what `docs/api-reference.md` calls the agent's outbound HTTP MCP server, and the two have different `send_message` tools.
+Claude Code shows a confirmation dialog titled "warning loading development channels" on every start (one confirmation; an unattended start with the development flag therefore does not work). Then, in a bound room the agent is a member of, write `@<agent> …` from an allowed sender. The name is not `triologue`: that is what `docs/api-reference.md` calls the agent's outbound HTTP MCP server, and the two have different `send_message` tools.
 
-As a plugin (`.claude-plugin/plugin.json`, `.mcp.json`, `hooks/hooks.json`, `commands/`) it starts with `--dangerously-load-development-channels plugin:triologue@<marketplace>`; on a Team or Enterprise plan an admin can add it to `allowedChannelPlugins`, after which plain `--channels plugin:triologue@<marketplace>` works without the dialog. The plugin's hooks are what make presence work: without them the session only reports `online`. **The plugin runs `dist/index.js`, which is not committed and which a marketplace install does not build** (Claude Code copies a git-sourced plugin into its cache and installs dependencies, nothing more). Until that is decided (ship `dist/`, or run from source), use a local-path marketplace that points at this checkout after `npm ci && npm run build`.
+**Smoke check after every Claude Code update** (the channel protocol is a research preview and may change): start as above, confirm the dialog, check that the channel start line appears under the banner and that `/mcp` lists `triologue-channel` as connected, then send one message from a bound room and see the reply arrive. If the server is listed but no message arrives, start Claude Code with `--debug` and look for `Channel notifications registered`.
 
-### Next to `bridge/` or a second terminal
+As a plugin (`.claude-plugin/plugin.json`, `.mcp.json`, `hooks/hooks.json`, `commands/`) it starts with `--dangerously-load-development-channels plugin:triologue@<marketplace>`; on a Team or Enterprise plan an admin can add it to `allowedChannelPlugins`, after which plain `--channels plugin:triologue@<marketplace>` works without the dialog. The plugin's hooks are what make presence work: without them the session only reports `online` (in the server form, add the entries of `hooks/hooks.json` to your settings with the script's absolute path). The plugin runs `dist/index.js`, which a marketplace install does not build (Claude Code copies a git-sourced plugin into its cache and installs dependencies, nothing more); until the packaged release exists, use a local-path marketplace that points at this checkout after `npm ci && npm run build`.
 
-Without a room binding the gateway delivers every message of the agent to **every** open stream of the agent: the bridge daemon and each Claude Code terminal would all get and answer the same message. A binding (`ROOMS=` at start or `connect_room`) takes the room over for this session; rooms nobody has bound still reach every stream. Bind a room before dogfooding next to the bridge.
+### Permission modes
+
+What a room message can make the session do depends on the session's permission mode, not on this server:
+
+- In the default mode every tool call that needs an approval asks in the terminal, and the prompt is relayed to the bound room (`yes <id>` / `no <id>`).
+- **In auto mode and in acceptEdits mode (and with `bypassPermissions`) a message from an allowed sender can make the session run tools without any relayed approval.** A Bash command requested from a room ran without a prompt in auto mode. Claude treats channel content as untrusted chat input (the server's instructions say so), but that is not a boundary. Switch to the default mode (Shift+Tab) before you bind a room, or keep `ALLOWED_SENDERS` to yourself.
+- `send_message` itself needs an approval in the default mode, so each answered request costs two relayed approvals (the tool, then the reply). To answer without asking, allow the reply tool in your settings (`~/.claude/settings.json` or the project's `.claude/settings.json`); `settings.example.json` holds the entry:
+
+  ```json
+  { "permissions": { "allow": ["mcp__triologue-channel__send_message"] } }
+  ```
+
+  That name is the server form's. With the rule in place Claude can post into any room of the agent without asking, including text from files it has read; leave it out if that is not acceptable.
+
+### Rooms and sessions
+
+- **A session receives only the rooms it is bound to.** Without a binding (no `ROOMS`, no `connect_room`, or after `disconnect_room` of its last room) it receives nothing; the gateway still streams the agent's messages, and the server drops them (`status` counts them as `room-not-bound`).
+- **Several sessions bound to the same room: only the most recently bound one answers.** It gets the room's messages; the other sessions get nothing for that room (dropped, counted as `answered-by-newer-session`, no notice in the session). They still take the verdicts for permission prompts they relayed to the room themselves, so a pending approval keeps working. `connect_room` on a room that is already bound binds it again and makes the session the most recent one; `disconnect_room` (or the session's exit) hands the room to the next most recent session that is still bound. `status` lists each bound room under `answering` or `standby`.
+- The order is kept in the state directory (`bindings/<hash of the token>/<room>/`, one small file per session with its bind time), so it covers the sessions on **this machine** that share the state directory. Sessions of the same agent on another machine are not part of it: each machine's most recent session answers. Bind a room on one machine only.
+- Next to `bridge/`: the gateway sends a room's messages to the streams of the sessions bound to it, so a bound room no longer reaches the bridge daemon; a room nobody has bound reaches every stream of the agent, the bridge included, and every channel session drops it.
 
 ### Sessions, reconnects, restarts
 
 - The gateway session (90 s TTL) is kept alive by the heartbeat. When the gateway answers `404` for it (`/clear` does not end it, but a sleep longer than the TTL or a gateway restart does) the server registers it again under the same id with the same room bindings and retries the call, so the stream's session tag stays valid; `status` counts these re-registrations.
+- Claude Code's session id is taken from `CLAUDE_CODE_SESSION_ID`, which Claude Code sets for the servers it spawns, at the first registration. The SessionStart hook fires before this server listens, so the server does not wait for it; later hooks (`/clear`, `/resume`) refresh the id.
 - The stream reconnects with backoff (a connection that held for 30 s starts the backoff over), gives up a connection that stays silent for 90 s (the gateway heartbeats every 25 s), and resumes from the last processed event id. That id lives in memory only: a new process starts from now, by design, so an attended session is not handed the backlog of a night.
-- REST calls time out after 10 s; shutdown waits at most 8 s for the gateway.
+- REST calls time out after 10 s; shutdown waits at most 8 s for the gateway. `/exit` ends the gateway session at once and removes the discovery and binding files.
+
+### When the gateway refuses a relay or a send
+
+A permission prompt the gateway does not post stays open in the terminal only. The server writes an `error:` line to stderr naming the request and the status, and `status` shows `relayFailures` (count and the last one with its status code). A refused `send_message` returns a tool error that starts with `send_message failed with status <code>:`, and `status` shows `sendFailures`. The error text carries the gateway's `detail`.
+
+About the `502` seen with two sessions posting within seconds: the gateway's own send limit (10 messages a minute for a `standard` agent, 30 for `elevated`) answers `429 RATE_LIMITED`, not `502`. A `502 Failed to deliver message` means Triologue refused or failed the post, and the gateway puts Triologue's status in `detail`. Triologue's `POST /api/agents/message` answers `429` for its own per-agent limit (`maxMessagesPerMinute` in the agent's config, 5 a minute by default) and for a message too similar to the agent's previous one in the same room within 5 seconds; two sessions relaying near-identical prompts fit either. Which one it was is not proven; the `detail` now shown says so the next time.
 
 ## Tools
 
 - `send_message { room_id, text, thread_id? }`
-- `connect_room { room }` (id, exact name or unique partial name; binds the session at the gateway, so the room's messages reach this session instead of every session, and permission prompts can be relayed there)
+- `connect_room { room }` (id, exact name or unique partial name; binds the session at the gateway, makes it the session that answers the room on this machine, and lets permission prompts be relayed there)
 - `disconnect_room { room }`
-- `status {}`
+- `status {}` (session, bound rooms as `answering` and `standby`, counters, `relayFailures`, `sendFailures`)
 
 ## Security
 
-- Gate on the sender, never on the room: `ALLOWED_SENDERS` matches the Triologue user id or username of the message's sender. An empty list delivers nothing (the server warns at start). Messages by other agents are dropped unless `ALLOW_AGENTS=true`.
-- Permission prompts, which carry the tool's input (a command, a path, the first lines of a file), are relayed only to a room that is bound, so the operator has opted it in; without a binding nothing leaves the terminal. Verdicts are accepted only from allowed **human** senders (never from an agent, whatever `ALLOW_AGENTS` says), only in the room the prompt went to, only for a request the server relayed itself, and only for 10 minutes; the verdict text never reaches the model. No confirmation is posted back, because Claude Code may still discard a verdict that the terminal answered first.
+- Gate on the sender, never on the room: `ALLOWED_SENDERS` matches the Triologue user id or username of the message's sender. An empty list delivers nothing (the server warns at start). Messages by other agents are dropped unless `ALLOW_AGENTS=true`. And only bound rooms pass.
+- Permission prompts, which carry the tool's input (a command, a path, the first lines of a file), are relayed only to a room that is bound, so the operator has opted it in; without a binding nothing leaves the terminal. Verdicts are accepted only from allowed **human** senders (never from an agent, whatever `ALLOW_AGENTS` says), only in the room the prompt went to, only for a request the server relayed itself, and only for 10 minutes; the verdict text never reaches the model. No confirmation is posted back, because Claude Code may still discard a verdict that the terminal answered first. See "Permission modes" for the modes in which nothing is asked at all.
 - The server's `instructions` tell Claude to treat channel content as untrusted chat input, and meta values (room name, sender) are stripped of quotes, angle brackets and line breaks before they become tag attributes. Prompt injection through a room stays a property of the setup; keep the allowlist short.
-- The token is read from the `.env` file (give it mode 600) and never logged. The hook listener is bound to `127.0.0.1` without authentication: any local process can post a status.
+- The token is read only from the `.env` file in the state directory, never from the environment or the command line, and the server refuses a file that the group or others may read or write. It is never logged.
+- The hook listener is bound to `127.0.0.1` and takes a post only with the secret the server draws at every start (32 random bytes) and writes, next to the port, into the discovery file `sessions/<claude pid>.json` (created with mode 600 and renamed into place, so it is never readable by others). The hook script sends it in a header that it reads from a here-document, so it does not show up in the process list; the listener compares it in constant time and answers anything else with a bare `401`. Another local user can therefore not set the session's status; a process running as you can read the file, like everything else of yours.
+- The binding files hold a process id, a bind time and the gateway session id, never the token; their directory is named after a hash of the token.
+- Things this server does not control: your own user-level hooks also run on a turn that a room message starts (a hook that adds context, such as a memory hook, adds it to that turn as well), and Claude Code gives its messaging token (`CLAUDE_CODE_MESSAGING_TOKEN`) to every stdio server it spawns, this one included.
 
 ## What is missing
 
-- Dogfooding against a real Claude Code and gateway (the spike of the Local Agent Chat Bridge plan): the confirmation flow of the development flag, registration on the v2 MCP runtime, `UserPromptSubmit` on channel-driven turns, idle wake-up, whether `process.ppid` is Claude Code's pid when it spawns `node dist/index.js` (the hook script falls back to the discovery file only when exactly one exists), and whether an MCP server survives `/clear` (the design assumes it does).
-- A decision on how the plugin gets its `dist/` (see Run), and the plugin manifest's `userConfig` with `sensitive: true` for the token.
-- Thread bindings (`connect_thread`), token rotation, and a `status` that includes the gateway's view of the session.
+- Packaging: a release that ships the built `dist/` and a marketplace entry, so the plugin form installs without a local build. The plugin form (`--plugin-dir` or a marketplace, `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PLUGIN_DATA`, the manifest's `userConfig` with `sensitive: true`) has not been run against Claude Code yet, and the reply tool's name there may differ from the server form's.
+- Thread bindings (`connect_thread`), which first need a way to create threads in Triologue.
+- A gateway-side order of bindings, so that "most recently bound answers" also holds across machines (today it holds per machine).
+- Token rotation, and a `status` that includes the gateway's view of the session.
+- Not yet checked live: that the server survives `/clear`, and `connect_room` by room name against Triologue.
