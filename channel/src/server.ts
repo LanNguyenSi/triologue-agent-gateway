@@ -29,7 +29,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { z } from 'zod';
 import { BINDING_REFRESH_MS, BindingOrder, bindingDir } from './bindings.js';
 import type { ChannelConfig } from './config.js';
-import { GatewayClient, GatewayError, SseStream, THREAD_ID_RE, THREAD_TITLE_MAX_CHARS, isUnknownSession, resolveRoom, type Log, type SseMessage } from './gateway.js';
+import { GatewayClient, GatewayError, SseStream, THREAD_ID_RE, MAX_BOUND_THREADS, THREAD_TITLE_MAX_CHARS, isUnknownSession, resolveRoom, type Log, type SseMessage } from './gateway.js';
 import { decideInbound, threadRoomRefusal, type GateConfig, type ThreadBinding } from './inbound.js';
 import { startPresenceListener, type PresenceChange } from './presence.js';
 
@@ -50,7 +50,7 @@ export const INSTRUCTIONS = [
   'Reply with the send_message tool, passing room_id (and thread_id when the tag has one) from the tag; keep replies short and plain text, at most 4000 characters.',
   'If nothing needs doing, do not reply. Never include secrets, tokens, or file contents that were not asked for.',
   'Permission verdicts ("yes abcde" / "no abcde") are handled by the channel itself and never reach you; do not act on them.',
-  'Only rooms bound with connect_room (or at start) and threads bound with connect_thread reach this session; a session bound only to a thread gets that thread, not the rest of its room. When several sessions of the agent on this machine are bound to the same room, only the most recently bound one gets its messages. In a thread-bound session send_message goes to the thread of the message you answer when thread_id is left out. connect_room and connect_thread also let permission prompts be relayed there (the thread first); disconnect_room and disconnect_thread undo it; status shows the session.',
+  'Only rooms bound with connect_room (or at start) and threads bound with connect_thread reach this session; a session bound only to a thread gets that thread, not the rest of its room. When several sessions of the agent on this machine are bound to the same room, only the most recently bound one gets its messages. When thread_id is left out, send_message posts at the top level of a room that is bound; for a room of which only threads are bound it goes into the thread of the last message that room delivered (pass thread_id from the tag when several threads of one room are bound), and thread_id "" asks for the top level explicitly. connect_room and connect_thread also let permission prompts be relayed there (the thread first); disconnect_room and disconnect_thread undo it; status shows the session.',
 ].join(' ');
 
 const PermissionRequestSchema = z.object({
@@ -132,6 +132,8 @@ export class ChannelServer {
   private presenceTimer: NodeJS.Timeout | null = null;
   private presenceDueAt = 0;
   private presenceSent: (PresenceReport & { at: number }) | null = null;
+  /** Room id -> the bound thread its last delivered message (or last binding) was in; the reply default of a room of which only threads are bound. */
+  private readonly lastThreadOfRoom = new Map<string, string>();
 
   constructor(private readonly deps: ChannelDeps) {
     this.heartbeatSeconds = deps.config.heartbeatSeconds;
@@ -388,6 +390,7 @@ export class ChannelServer {
     }
     this.state.activeRoom = message.room;
     this.state.activeThread = this.boundThreadOf(message.room, message.threadId);
+    if (this.state.activeThread) this.lastThreadOfRoom.set(message.room, this.state.activeThread);
     this.state.delivered += 1;
     await this.mcp.notification({
       method: 'notifications/claude/channel',
@@ -408,7 +411,11 @@ export class ChannelServer {
       this.state.pendingPermissions.delete(requestId);
       return;
     }
-    if (pending.room !== room || pending.threadId !== threadId) {
+    // Where a verdict counts: a prompt posted at the top level of a room is
+    // answered by any message of that room, in a thread of it or not (as
+    // before threads existed); a prompt posted into a thread only by a message
+    // in that same thread of that same room. The sender gate applies to both.
+    if (pending.room !== room || (pending.threadId !== null && pending.threadId !== threadId)) {
       this.deps.log('info', `verdict for ${requestId} from another room or thread than the prompt ignored`);
       return;
     }
@@ -533,13 +540,13 @@ export class ChannelServer {
       tools: [
         {
           name: 'send_message',
-          description: 'Send a message into a Triologue room as this agent. Pass thread_id to answer inside a thread.',
+          description: 'Send a message into a Triologue room as this agent. Pass thread_id to answer inside a thread. Left out, the message goes to the top level of a bound room; for a room of which only threads are bound it goes into the thread of the last message that room delivered (pass thread_id from the tag when several threads of that room are bound). thread_id "" posts at the top level.',
           inputSchema: {
             type: 'object',
             properties: {
               room_id: { type: 'string', description: 'The room id from the <channel> tag' },
               text: { type: 'string', description: 'Plain text, at most 4000 characters' },
-              thread_id: { type: 'string', description: 'The thread_id from the <channel> tag, when answering in a thread' },
+              thread_id: { type: 'string', description: 'The thread_id from the <channel> tag, when answering in a thread; "" (empty) posts at the top level of the room' },
             },
             required: ['room_id', 'text'],
           },
@@ -610,8 +617,11 @@ export class ChannelServer {
     const roomId = typeof args.room_id === 'string' ? args.room_id.trim() : '';
     const content = typeof args.text === 'string' ? args.text : '';
     if (!roomId) throw new Error('room_id is required');
-    // Left out: the thread of the message being answered, when this session is bound to it.
-    const threadId = typeof args.thread_id === 'string' && args.thread_id.trim().length > 0 ? args.thread_id.trim() : this.defaultThread(roomId);
+    // An explicit thread_id wins, "" asks for the top level. Left out: top level
+    // in a bound room; in a room of which only threads are bound, the thread of
+    // the last message it delivered (defaultThread).
+    const explicit = typeof args.thread_id === 'string' ? args.thread_id.trim() : undefined;
+    const threadId = explicit === undefined ? this.defaultThread(roomId) : explicit.length > 0 ? explicit : null;
     if (content.trim().length === 0) throw new Error('text is required');
     if (content.length > MAX_CONTENT_CHARS) throw new Error(`text is longer than ${MAX_CONTENT_CHARS} characters`);
     let result: { messageId: string };
@@ -625,10 +635,16 @@ export class ChannelServer {
     return { ok: true, room_id: roomId, ...(threadId ? { thread_id: threadId } : {}), messageId: result.messageId };
   }
 
-  /** The bound thread the last delivered message (or binding) was in, when it belongs to the room. */
+  /**
+   * The thread a reply without thread_id goes into: only for a room that is
+   * not bound (every message it delivers came from a bound thread), the bound
+   * thread of that room the last delivered message (or binding) was in. A
+   * bound room replies at the top level, as before threads existed.
+   */
   private defaultThread(roomId: string): string | null {
-    const { activeThread, boundThreads } = this.state;
-    return activeThread && boundThreads.get(activeThread)?.roomId === roomId ? activeThread : null;
+    if (this.state.boundRooms.has(roomId)) return null;
+    const threadId = this.lastThreadOfRoom.get(roomId);
+    return threadId && this.state.boundThreads.get(threadId)?.roomId === roomId ? threadId : null;
   }
 
   private async toolConnect(query: string, apply: 'bind' | 'unbind'): Promise<{ ok: true; room: { id: string; name: string }; rooms: string[]; answers?: boolean }> {
@@ -658,6 +674,10 @@ export class ChannelServer {
     if ((existing.length > 0) === (title.length > 0)) throw new Error('give either thread_id (an existing thread) or title (create a thread), not both and not neither');
     if (existing && !THREAD_ID_RE.test(existing)) throw new Error('thread_id must match [A-Za-z0-9_-]{1,128}');
     if (title.length > THREAD_TITLE_MAX_CHARS) throw new Error(`title is longer than ${THREAD_TITLE_MAX_CHARS} characters`);
+    // The gateway takes at most MAX_BOUND_THREADS threads per registration; refuse before creating a thread.
+    if (!this.state.boundThreads.has(existing) && this.state.boundThreads.size >= MAX_BOUND_THREADS) {
+      throw new Error(`this session already has ${MAX_BOUND_THREADS} threads bound, the most the gateway accepts; disconnect_thread one first`);
+    }
 
     const rooms = await this.deps.gateway.listRooms();
     const resolved = resolveRoom(rooms, query);
@@ -679,6 +699,7 @@ export class ChannelServer {
     this.state.boundThreads.set(thread.id, { roomId: room.id, title: thread.title });
     this.state.activeRoom = room.id;
     this.state.activeThread = thread.id;
+    this.lastThreadOfRoom.set(room.id, thread.id);
     return { ok: true, created, thread: { id: thread.id, title: thread.title, room }, threads: [...this.state.boundThreads.keys()] };
   }
 
@@ -688,6 +709,7 @@ export class ChannelServer {
     await this.withSession((sessionId) => this.deps.gateway.unbind(sessionId, [], [id]));
     this.state.boundThreads.delete(id);
     if (this.state.activeThread === id) this.state.activeThread = null;
+    for (const [room, last] of this.lastThreadOfRoom) if (last === id) this.lastThreadOfRoom.delete(room);
     return { ok: true, thread_id: id, threads: [...this.state.boundThreads.keys()] };
   }
 

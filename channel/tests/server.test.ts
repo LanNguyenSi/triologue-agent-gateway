@@ -707,4 +707,180 @@ describe('thread bindings', () => {
     expect((await tool(a, 'status')).body.relayFailures).toMatchObject({ failures: 1, last: { status: 400, room: 'room-1', threadId: 'th-1', requestId: 'abcde' } });
     expect(a.logs).toContainEqual(['error', expect.stringMatching(/was not relayed to room room-1 \(thread th-1\), the gateway answered 400/)]);
   });
+  describe('verdicts', () => {
+    it('a prompt posted at the top level of a bound room is answered from any message of that room, also inside a thread this session is not bound to (as before threads)', async () => {
+      const a = await machine()(['room-1']);
+      await askPermission(a, 'abcde');
+      expect(a.gateway.sent.at(-1)).toMatchObject({ roomId: 'room-1', threadId: null });
+      await pushThread(a, 'room-1', 'th-2', 'yes abcde');
+      expect(a.verdicts).toEqual([{ request_id: 'abcde', behavior: 'allow' }]);
+      expect(a.events).toEqual([]);
+      await askPermission(a, 'fghij');
+      await fanOut([a], 'room-1', 'no fghij');
+      expect(a.verdicts.at(-1)).toEqual({ request_id: 'fghij', behavior: 'deny' });
+    });
+
+    it('a top-level prompt is not answered from another room, also not from a thread of another room', async () => {
+      const a = await machine()(['room-1', 'room-2']);
+      await askPermission(a, 'abcde');
+      expect(a.gateway.sent.at(-1)).toMatchObject({ roomId: 'room-1', threadId: null });
+      await fanOut([a], 'room-2', 'yes abcde');
+      await pushThread(a, 'room-2', 'th-ops', 'yes abcde');
+      expect(a.verdicts).toEqual([]);
+      expect(a.logs.filter(([, m]) => m.includes('another room or thread than the prompt'))).toHaveLength(2);
+      await pushThread(a, 'room-1', 'th-1', 'yes abcde');
+      expect(a.verdicts).toEqual([{ request_id: 'abcde', behavior: 'allow' }]);
+    });
+
+    it('a prompt posted into a thread is not answered at the top level of its room, and the prompt stays open for its thread', async () => {
+      const a = await machine()(['room-1']);
+      await tool(a, 'connect_thread', { room: 'backend', thread_id: 'th-1' });
+      await askPermission(a, 'abcde');
+      await fanOut([a], 'room-1', 'yes abcde');
+      expect(a.verdicts).toEqual([]);
+      expect(a.logs).toContainEqual(['info', 'verdict for abcde from another room or thread than the prompt ignored']);
+      expect((await tool(a, 'status')).body.pendingPermissions).toEqual(['abcde']);
+      await pushThread(a, 'room-1', 'th-1', 'yes abcde');
+      expect(a.verdicts).toEqual([{ request_id: 'abcde', behavior: 'allow' }]);
+    });
+
+    it('a prompt posted into a thread is not answered from another thread, bound or not', async () => {
+      const a = await machine()();
+      await tool(a, 'connect_thread', { room: 'backend', thread_id: 'th-2' });
+      await tool(a, 'connect_thread', { room: 'backend', thread_id: 'th-1' });
+      await askPermission(a, 'abcde');
+      expect(a.gateway.sent.at(-1)).toMatchObject({ threadId: 'th-1' });
+      await pushThread(a, 'room-1', 'th-2', 'yes abcde');
+      await pushThread(a, 'room-1', 'th-3', 'yes abcde');
+      expect(a.verdicts).toEqual([]);
+      await pushThread(a, 'room-1', 'th-1', 'no abcde');
+      expect(a.verdicts).toEqual([{ request_id: 'abcde', behavior: 'deny' }]);
+    });
+
+    it('the sender gate still applies to a verdict for a top-level prompt given inside a thread: not an agent, not a stranger', async () => {
+      const a = await machine()(['room-1']);
+      await askPermission(a, 'abcde');
+      await a.server.onMessage(threadMessage('room-1', 'th-2', 'yes abcde', { sender: 'mallory', senderId: 'user-mallory' }));
+      await a.server.onMessage(threadMessage('room-1', 'th-2', 'yes abcde', { sender: 'lava', senderId: 'user-lan', senderType: 'AI' }));
+      expect(a.verdicts).toEqual([]);
+      expect((await tool(a, 'status')).body).toMatchObject({ dropped: { 'sender-not-allowed': 1, 'ai-sender': 1 } });
+      await pushThread(a, 'room-1', 'th-2', 'yes abcde');
+      expect(a.verdicts).toEqual([{ request_id: 'abcde', behavior: 'allow' }]);
+    });
+  });
+
+  describe('the reply default', () => {
+    const lastSent = (s: Session) => s.gateway.sent.at(-1);
+
+    it('with the room bound as well, a reply without thread_id is top-level, also after a message in the bound thread; an explicit thread_id still wins', async () => {
+      const a = await machine()(['room-1']);
+      await tool(a, 'connect_thread', { room: 'backend', thread_id: 'th-1' });
+      await fanOut([a], 'room-1', 'a question in the room');
+      await pushThread(a, 'room-1', 'th-1', 'something in the thread');
+      await tool(a, 'send_message', { room_id: 'room-1', text: 'answer to the question' });
+      expect(lastSent(a)).toMatchObject({ roomId: 'room-1', threadId: null });
+      await tool(a, 'send_message', { room_id: 'room-1', text: 'with an empty thread_id', thread_id: '' });
+      expect(lastSent(a)).toMatchObject({ threadId: null });
+      expect((await tool(a, 'send_message', { room_id: 'room-1', text: 'into the thread', thread_id: 'th-1' })).body).toMatchObject({ thread_id: 'th-1' });
+      expect(lastSent(a)).toMatchObject({ threadId: 'th-1' });
+    });
+
+    it('thread_id "" (or blanks) posts at the top level even where the thread would be the default; the result has no thread_id', async () => {
+      const a = await machine()();
+      await tool(a, 'connect_thread', { room: 'backend', thread_id: 'th-1' });
+      await pushThread(a, 'room-1', 'th-1', 'question');
+      const result = await tool(a, 'send_message', { room_id: 'room-1', text: 'top level please', thread_id: '' });
+      expect(result.body).toEqual({ ok: true, room_id: 'room-1', messageId: 'm-1' });
+      expect(lastSent(a)).toMatchObject({ threadId: null });
+      await tool(a, 'send_message', { room_id: 'room-1', text: 'blank', thread_id: '   ' });
+      expect(lastSent(a)).toMatchObject({ threadId: null });
+      await tool(a, 'send_message', { room_id: 'room-1', text: 'omitted' });
+      expect(lastSent(a)).toMatchObject({ threadId: 'th-1' });
+    });
+
+    it('with several bound threads of a room and the room not bound, a reply without thread_id goes into the thread of the last message the room delivered', async () => {
+      const a = await machine()();
+      await tool(a, 'connect_thread', { room: 'backend', thread_id: 'th-1' });
+      await tool(a, 'connect_thread', { room: 'backend', thread_id: 'th-2' });
+      await pushThread(a, 'room-1', 'th-1', 'one');
+      await tool(a, 'send_message', { room_id: 'room-1', text: 'a' });
+      expect(lastSent(a)).toMatchObject({ threadId: 'th-1' });
+      await pushThread(a, 'room-1', 'th-2', 'two');
+      await tool(a, 'send_message', { room_id: 'room-1', text: 'b' });
+      expect(lastSent(a)).toMatchObject({ threadId: 'th-2' });
+      await tool(a, 'send_message', { room_id: 'room-1', text: 'c', thread_id: 'th-1' });
+      expect(lastSent(a)).toMatchObject({ threadId: 'th-1' });
+    });
+
+    it('the default is per room: a message of another room does not move it', async () => {
+      const a = await machine()();
+      await tool(a, 'connect_thread', { room: 'backend', thread_id: 'th-1' });
+      await tool(a, 'connect_thread', { room: 'ops', thread_id: 'th-ops' });
+      await pushThread(a, 'room-1', 'th-1', 'one');
+      await pushThread(a, 'room-2', 'th-ops', 'two');
+      await tool(a, 'send_message', { room_id: 'room-1', text: 'a' });
+      expect(lastSent(a)).toMatchObject({ roomId: 'room-1', threadId: 'th-1' });
+      await tool(a, 'send_message', { room_id: 'room-2', text: 'b' });
+      expect(lastSent(a)).toMatchObject({ roomId: 'room-2', threadId: 'th-ops' });
+    });
+
+    it('after the last delivering thread is disconnected the room has no default; binding the room makes top level the default', async () => {
+      const a = await machine()();
+      await tool(a, 'connect_thread', { room: 'backend', thread_id: 'th-1' });
+      await tool(a, 'connect_thread', { room: 'backend', thread_id: 'th-2' });
+      await tool(a, 'disconnect_thread', { thread_id: 'th-2' });
+      await tool(a, 'send_message', { room_id: 'room-1', text: 'a' });
+      expect(lastSent(a)).toMatchObject({ threadId: null });
+      await tool(a, 'connect_thread', { room: 'backend', thread_id: 'th-2' });
+      await tool(a, 'send_message', { room_id: 'room-1', text: 'b' });
+      expect(lastSent(a)).toMatchObject({ threadId: 'th-2' });
+      await tool(a, 'connect_room', { room: 'backend' });
+      await tool(a, 'send_message', { room_id: 'room-1', text: 'c' });
+      expect(lastSent(a)).toMatchObject({ threadId: null });
+    });
+
+    it('the tool description says what an omitted and an empty thread_id do', async () => {
+      const a = await machine()();
+      const { tools } = await a.client.listTools();
+      const send = tools.find((t) => t.name === 'send_message')!;
+      expect(send.description).toContain('thread_id "" posts at the top level');
+      expect(JSON.stringify(send.inputSchema)).toContain('(empty) posts at the top level');
+    });
+  });
+
+  describe('the thread cap', () => {
+    const bindMany = async (s: Session, count: number) => {
+      for (let i = 0; i < count; i += 1) s.gateway.threads.set(`cap-${i}`, { id: `cap-${i}`, title: `T${i}`, roomId: 'room-1' });
+      for (let i = 0; i < count; i += 1) expect((await tool(s, 'connect_thread', { room: 'backend', thread_id: `cap-${i}` })).isError).toBeUndefined();
+    };
+
+    it('refuses a 51st thread binding, naming the limit, before it creates or looks up anything', async () => {
+      const a = await machine()();
+      await bindMany(a, 50);
+      a.gateway.threads.set('cap-50', { id: 'cap-50', title: 'T50', roomId: 'room-1' });
+      const calls = a.gateway.threadCalls.length;
+      const binds = a.gateway.binds.length;
+      const existing = await tool(a, 'connect_thread', { room: 'backend', thread_id: 'cap-50' });
+      expect(existing.isError).toBe(true);
+      expect(existing.text).toContain('50 threads');
+      const created = await tool(a, 'connect_thread', { room: 'backend', title: 'One too many' });
+      expect(created.isError).toBe(true);
+      expect(created.text).toContain('50 threads');
+      expect(a.gateway.threadCalls).toHaveLength(calls);
+      expect(a.gateway.binds).toHaveLength(binds);
+      expect(a.server.state.boundThreads.size).toBe(50);
+      // A registration still fits the gateway's 50-id limit.
+      await (a.server as unknown as { register(reason: string | null, recover?: boolean): Promise<boolean> }).register('test', true);
+      expect((a.gateway.connects.at(-1) as { threads?: string[] }).threads).toHaveLength(50);
+    });
+
+    it('binding an already bound thread again works at the cap, and a freed slot can be used', async () => {
+      const a = await machine()();
+      await bindMany(a, 50);
+      expect((await tool(a, 'connect_thread', { room: 'backend', thread_id: 'cap-3' })).body).toMatchObject({ ok: true });
+      await tool(a, 'disconnect_thread', { thread_id: 'cap-3' });
+      expect((await tool(a, 'connect_thread', { room: 'backend', title: 'Fits now' })).body).toMatchObject({ ok: true, created: true });
+      expect(a.server.state.boundThreads.size).toBe(50);
+    });
+  });
 });

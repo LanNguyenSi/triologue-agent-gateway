@@ -68,6 +68,12 @@ export function isUnknownSession(err: unknown): boolean {
 export const THREAD_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 /** What Triologue accepts as a thread title. */
 export const THREAD_TITLE_MAX_CHARS = 200;
+/**
+ * How many threads one session may have bound. The gateway's connect and bind
+ * routes take at most 50 ids per call and a registration sends all bound
+ * threads in one body, so a 51st binding would make every re-registration fail.
+ */
+export const MAX_BOUND_THREADS = 50;
 
 export interface ThreadInfo {
   id: string;
