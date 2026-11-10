@@ -50,7 +50,7 @@ export const INSTRUCTIONS = [
   'Reply with the send_message tool, passing room_id (and thread_id when the tag has one) from the tag; keep replies short and plain text, at most 4000 characters.',
   'If nothing needs doing, do not reply. Never include secrets, tokens, or file contents that were not asked for.',
   'Permission verdicts ("yes abcde" / "no abcde") are handled by the channel itself and never reach you; do not act on them.',
-  'Only rooms bound with connect_room (or at start) and threads bound with connect_thread reach this session; a session bound only to a thread gets that thread, not the rest of its room. When several sessions of the agent on this machine are bound to the same room, only the most recently bound one gets its messages. When thread_id is left out, send_message posts at the top level of a room that is bound; for a room of which only threads are bound it goes into the thread of the last message that room delivered (pass thread_id from the tag when several threads of one room are bound), and thread_id "" asks for the top level explicitly. connect_room and connect_thread also let permission prompts be relayed there (the thread first); disconnect_room and disconnect_thread undo it; status shows the session.',
+  'Only rooms bound with connect_room (or at start) and threads bound with connect_thread reach this session; a session bound only to a thread gets that thread, not the rest of its room. When several sessions of the agent on this machine are bound to the same room, only the most recently bound one gets its messages. When thread_id is left out, send_message posts at the top level of a room that is bound; for a room of which only threads are bound it goes into the thread of the last message that room delivered or the thread bound last, whichever came later (pass thread_id from the tag when several threads of one room are bound), and thread_id "" asks for the top level explicitly. connect_room and connect_thread also let permission prompts be relayed there (the thread first); disconnect_room and disconnect_thread undo it; status shows the session.',
 ].join(' ');
 
 const PermissionRequestSchema = z.object({
@@ -540,7 +540,7 @@ export class ChannelServer {
       tools: [
         {
           name: 'send_message',
-          description: 'Send a message into a Triologue room as this agent. Pass thread_id to answer inside a thread. Left out, the message goes to the top level of a bound room; for a room of which only threads are bound it goes into the thread of the last message that room delivered (pass thread_id from the tag when several threads of that room are bound). thread_id "" posts at the top level.',
+          description: 'Send a message into a Triologue room as this agent. Pass thread_id to answer inside a thread. Left out, the message goes to the top level of a bound room; for a room of which only threads are bound it goes into the thread of the last message that room delivered or the thread bound last, whichever came later (pass thread_id from the tag when several threads of that room are bound). thread_id "" posts at the top level.',
           inputSchema: {
             type: 'object',
             properties: {

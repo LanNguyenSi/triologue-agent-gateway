@@ -824,6 +824,17 @@ describe('thread bindings', () => {
       expect(lastSent(a)).toMatchObject({ roomId: 'room-2', threadId: 'th-ops' });
     });
 
+    it('with another room bound, a room bound only through a thread still defaults to that thread', async () => {
+      const a = await machine()(['room-2']);
+      await tool(a, 'connect_thread', { room: 'backend', thread_id: 'th-1' });
+      await pushThread(a, 'room-1', 'th-1', 'in the thread');
+      await fanOut([a], 'room-2', 'top level in the bound room');
+      await tool(a, 'send_message', { room_id: 'room-1', text: 'reply to the thread' });
+      expect(lastSent(a)).toMatchObject({ roomId: 'room-1', threadId: 'th-1' });
+      await tool(a, 'send_message', { room_id: 'room-2', text: 'reply in the bound room' });
+      expect(lastSent(a)).toMatchObject({ roomId: 'room-2', threadId: null });
+    });
+
     it('after the last delivering thread is disconnected the room has no default; binding the room makes top level the default', async () => {
       const a = await machine()();
       await tool(a, 'connect_thread', { room: 'backend', thread_id: 'th-1' });
