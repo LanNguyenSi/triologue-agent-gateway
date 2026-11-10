@@ -3,15 +3,15 @@
  *
  *   - pushes Triologue room messages into the running session as
  *     `notifications/claude/channel` (after the inbound gate),
- *   - offers `send_message`, `connect_room`, `disconnect_room` and `status`
- *     as tools,
- *   - relays Claude Code's permission prompts into a bound room and turns
- *     `yes <id>` / `no <id>` from an allowed person in that room into the
- *     verdict; a relay or send the gateway refuses shows up in `status`, in
- *     the tool result and on stderr,
- *   - delivers only rooms this session is bound to, and of the sessions on
- *     this machine bound to the same room only the most recently bound one
- *     (bindings.ts),
+ *   - offers `send_message`, `connect_room`, `disconnect_room`,
+ *     `connect_thread`, `disconnect_thread` and `status` as tools,
+ *   - relays Claude Code's permission prompts into the bound thread, else a
+ *     bound room, and turns `yes <id>` / `no <id>` from an allowed person
+ *     there into the verdict; a relay or send the gateway refuses shows up in
+ *     `status`, in the tool result and on stderr,
+ *   - delivers only rooms and threads this session is bound to, and of the
+ *     sessions on this machine bound to the same room only the most recently
+ *     bound one (bindings.ts),
  *   - registers an agent session at the gateway, keeps it alive (and
  *     re-registers it under the same id when the gateway has forgotten it),
  *     and reports the presence that the local hooks post to the presence
@@ -29,8 +29,8 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 import { z } from 'zod';
 import { BINDING_REFRESH_MS, BindingOrder, bindingDir } from './bindings.js';
 import type { ChannelConfig } from './config.js';
-import { GatewayClient, GatewayError, SseStream, isUnknownSession, resolveRoom, type Log, type SseMessage } from './gateway.js';
-import { decideInbound, type GateConfig } from './inbound.js';
+import { GatewayClient, GatewayError, SseStream, THREAD_ID_RE, MAX_BOUND_THREADS, THREAD_TITLE_MAX_CHARS, isUnknownSession, resolveRoom, type Log, type SseMessage } from './gateway.js';
+import { decideInbound, threadRoomRefusal, type GateConfig, type ThreadBinding } from './inbound.js';
 import { startPresenceListener, type PresenceChange } from './presence.js';
 
 /** Distinct from `triologue`, the name the docs give the agent's outbound HTTP MCP server. */
@@ -50,7 +50,7 @@ export const INSTRUCTIONS = [
   'Reply with the send_message tool, passing room_id (and thread_id when the tag has one) from the tag; keep replies short and plain text, at most 4000 characters.',
   'If nothing needs doing, do not reply. Never include secrets, tokens, or file contents that were not asked for.',
   'Permission verdicts ("yes abcde" / "no abcde") are handled by the channel itself and never reach you; do not act on them.',
-  'Only rooms bound with connect_room (or at start) reach this session; when several sessions of the agent on this machine are bound to the same room, only the most recently bound one gets its messages. connect_room also lets permission prompts be relayed to the room; disconnect_room undoes it; status shows the session.',
+  'Only rooms bound with connect_room (or at start) and threads bound with connect_thread reach this session; a session bound only to a thread gets that thread, not the rest of its room. When several sessions of the agent on this machine are bound to the same room, only the most recently bound one gets its messages. When thread_id is left out, send_message posts at the top level of a room that is bound; for a room of which only threads are bound it goes into the thread of the last message that room delivered or the thread bound last, whichever came later (pass thread_id from the tag when several threads of one room are bound), and thread_id "" asks for the top level explicitly. connect_room and connect_thread also let permission prompts be relayed there (the thread first); disconnect_room and disconnect_thread undo it; status shows the session.',
 ].join(' ');
 
 const PermissionRequestSchema = z.object({
@@ -80,18 +80,22 @@ export interface ChannelDeps {
 /** A refused relay or send, kept for `status`. */
 export interface FailureRecord {
   failures: number;
-  last: { at: string; status: number | null; error: string; room: string; requestId?: string } | null;
+  last: { at: string; status: number | null; error: string; room: string; threadId?: string; requestId?: string } | null;
 }
 
 export interface ChannelState {
   sessionId: string | null;
   selfUsername: string;
   boundRooms: Set<string>;
+  /** Threads the session is bound to (thread id -> room and title). */
+  boundThreads: Map<string, ThreadBinding>;
   /** The room the last delivered message came from (or the last bound one). */
   activeRoom: string | null;
+  /** The bound thread the last delivered message came from (or the last bound one); null after a top-level message or a room binding. */
+  activeThread: string | null;
   status: PresenceChange['status'];
   statusDetail: string | null;
-  pendingPermissions: Map<string, { toolName: string; room: string; expiresAt: number }>;
+  pendingPermissions: Map<string, { toolName: string; room: string; threadId: string | null; expiresAt: number }>;
   delivered: number;
   dropped: Record<string, number>;
   /** How often the gateway had forgotten the session and it was registered again. */
@@ -128,6 +132,8 @@ export class ChannelServer {
   private presenceTimer: NodeJS.Timeout | null = null;
   private presenceDueAt = 0;
   private presenceSent: (PresenceReport & { at: number }) | null = null;
+  /** Room id -> the bound thread its last delivered message (or last binding) was in; the reply default of a room of which only threads are bound. */
+  private readonly lastThreadOfRoom = new Map<string, string>();
 
   constructor(private readonly deps: ChannelDeps) {
     this.heartbeatSeconds = deps.config.heartbeatSeconds;
@@ -135,7 +141,9 @@ export class ChannelServer {
       sessionId: null,
       selfUsername: '',
       boundRooms: new Set(deps.config.rooms),
+      boundThreads: new Map(),
       activeRoom: deps.config.rooms[0] ?? null,
+      activeThread: null,
       status: 'online',
       statusDetail: null,
       pendingPermissions: new Map(),
@@ -276,6 +284,7 @@ export class ChannelServer {
         project: config.project,
         claudeSessionId: config.claudeSessionId,
         rooms: [...this.state.boundRooms],
+        ...(this.state.boundThreads.size > 0 ? { threads: [...this.state.boundThreads.keys()] } : {}),
       });
       if (this.stopped) {
         // stop() ran while this registration was in flight and found no
@@ -363,6 +372,7 @@ export class ChannelServer {
       allowedSenders: this.deps.config.allowedSenders,
       allowAgents: this.deps.config.allowAgents,
       boundRooms: this.state.boundRooms,
+      boundThreads: this.state.boundThreads,
       answersRoom: (roomId) => this.bindings.answers(roomId),
     };
   }
@@ -375,10 +385,12 @@ export class ChannelServer {
       return;
     }
     if (decision.action === 'verdict') {
-      await this.sendVerdict(decision.requestId, decision.behavior, message.room);
+      await this.sendVerdict(decision.requestId, decision.behavior, message.room, message.threadId || null);
       return;
     }
     this.state.activeRoom = message.room;
+    this.state.activeThread = this.boundThreadOf(message.room, message.threadId);
+    if (this.state.activeThread) this.lastThreadOfRoom.set(message.room, this.state.activeThread);
     this.state.delivered += 1;
     await this.mcp.notification({
       method: 'notifications/claude/channel',
@@ -386,15 +398,25 @@ export class ChannelServer {
     });
   }
 
-  private async sendVerdict(requestId: string, behavior: 'allow' | 'deny', room: string): Promise<void> {
+  /** The thread id when it is a bound thread of that room, else null. */
+  private boundThreadOf(room: string, threadId: string | null | undefined): string | null {
+    if (!threadId) return null;
+    return this.state.boundThreads.get(threadId)?.roomId === room ? threadId : null;
+  }
+
+  private async sendVerdict(requestId: string, behavior: 'allow' | 'deny', room: string, threadId: string | null): Promise<void> {
     const pending = this.state.pendingPermissions.get(requestId);
     if (!pending || pending.expiresAt < Date.now()) {
       this.deps.log('info', `verdict for unknown or expired request ${requestId} ignored`);
       this.state.pendingPermissions.delete(requestId);
       return;
     }
-    if (pending.room !== room) {
-      this.deps.log('info', `verdict for ${requestId} from another room than the prompt ignored`);
+    // Where a verdict counts: a prompt posted at the top level of a room is
+    // answered by any message of that room, in a thread of it or not (as
+    // before threads existed); a prompt posted into a thread only by a message
+    // in that same thread of that same room. The sender gate applies to both.
+    if (pending.room !== room || (pending.threadId !== null && pending.threadId !== threadId)) {
+      this.deps.log('info', `verdict for ${requestId} from another room or thread than the prompt ignored`);
       return;
     }
     this.state.pendingPermissions.delete(requestId);
@@ -410,24 +432,37 @@ export class ChannelServer {
   // ── permission relay ──
 
   /**
-   * Where a permission prompt goes: a bound room only, so the operator has
-   * opted the room in (`ROOMS` or connect_room); the room the last message
-   * came from when that one is bound. The prompt carries the tool input.
+   * Where a permission prompt goes: a bound thread or a bound room only, so
+   * the operator has opted it in (`ROOMS`, connect_room or connect_thread).
+   * The bound thread the last message came from (or the last one bound) comes
+   * first; then the room the last message came from when that one is bound;
+   * then the first bound thread, then the first bound room. The prompt carries
+   * the tool input.
    */
+  permissionTarget(): { room: string; threadId: string | null } | null {
+    const { activeRoom, activeThread, boundRooms, boundThreads } = this.state;
+    const active = activeThread ? boundThreads.get(activeThread) : undefined;
+    if (activeThread && active) return { room: active.roomId, threadId: activeThread };
+    if (activeRoom && boundRooms.has(activeRoom)) return { room: activeRoom, threadId: null };
+    for (const [threadId, thread] of boundThreads) return { room: thread.roomId, threadId };
+    const room = [...boundRooms][0];
+    return room ? { room, threadId: null } : null;
+  }
+
+  /** The room of the permission target (what `status` reports as permissionRoom). */
   permissionRoom(): string | null {
-    const { activeRoom, boundRooms } = this.state;
-    if (activeRoom && boundRooms.has(activeRoom)) return activeRoom;
-    return [...boundRooms][0] ?? null;
+    return this.permissionTarget()?.room ?? null;
   }
 
   private async onPermissionRequest(params: z.infer<typeof PermissionRequestSchema>['params']): Promise<void> {
-    const room = this.permissionRoom();
-    if (!room) {
-      this.deps.log('info', `permission request ${params.request_id} not relayed: no bound room (ROOMS or connect_room)`);
+    const target = this.permissionTarget();
+    if (!target) {
+      this.deps.log('info', `permission request ${params.request_id} not relayed: no bound room or thread (ROOMS, connect_room or connect_thread)`);
       return;
     }
+    const { room, threadId } = target;
     this.prunePermissions();
-    this.state.pendingPermissions.set(params.request_id, { toolName: params.tool_name, room, expiresAt: Date.now() + PERMISSION_TTL_MS });
+    this.state.pendingPermissions.set(params.request_id, { toolName: params.tool_name, room, threadId, expiresAt: Date.now() + PERMISSION_TTL_MS });
     const preview = params.input_preview.length > 600 ? `${params.input_preview.slice(0, 600)}…` : params.input_preview;
     const text = [
       `🟠 Claude wants to run ${params.tool_name}: ${params.description}`,
@@ -435,11 +470,11 @@ export class ChannelServer {
       `Reply "yes ${params.request_id}" or "no ${params.request_id}" (valid for 10 minutes).`,
     ].filter((s) => s.length > 0).join('\n');
     try {
-      await this.deps.gateway.sendMessage(room, text, null, `perm-${params.request_id}`);
+      await this.deps.gateway.sendMessage(room, text, threadId, `perm-${params.request_id}`);
     } catch (err) {
       // The prompt is still open in the terminal; the room never saw it.
-      const status = recordFailure(this.state.relay, err, room, params.request_id);
-      this.deps.log('error', `permission request ${params.request_id} (${params.tool_name}) was not relayed to room ${room}${status ? `, the gateway answered ${status}` : ''}: ${errorMessage(err)}; answer it in the terminal`);
+      const status = recordFailure(this.state.relay, err, room, params.request_id, threadId);
+      this.deps.log('error', `permission request ${params.request_id} (${params.tool_name}) was not relayed to room ${room}${threadId ? ` (thread ${threadId})` : ''}${status ? `, the gateway answered ${status}` : ''}: ${errorMessage(err)}; answer it in the terminal`);
     }
   }
 
@@ -505,13 +540,13 @@ export class ChannelServer {
       tools: [
         {
           name: 'send_message',
-          description: 'Send a message into a Triologue room as this agent. Pass thread_id to answer inside a thread.',
+          description: 'Send a message into a Triologue room as this agent. Pass thread_id to answer inside a thread. Left out, the message goes to the top level of a bound room; for a room of which only threads are bound it goes into the thread of the last message that room delivered or the thread bound last, whichever came later (pass thread_id from the tag when several threads of that room are bound). thread_id "" posts at the top level.',
           inputSchema: {
             type: 'object',
             properties: {
               room_id: { type: 'string', description: 'The room id from the <channel> tag' },
               text: { type: 'string', description: 'Plain text, at most 4000 characters' },
-              thread_id: { type: 'string', description: 'The thread_id from the <channel> tag, when answering in a thread' },
+              thread_id: { type: 'string', description: 'The thread_id from the <channel> tag, when answering in a thread; "" (empty) posts at the top level of the room' },
             },
             required: ['room_id', 'text'],
           },
@@ -527,8 +562,26 @@ export class ChannelServer {
           inputSchema: { type: 'object', properties: { room: { type: 'string' } }, required: ['room'] },
         },
         {
+          name: 'connect_thread',
+          description: 'Bind this session to a thread of a room: either an existing thread (thread_id) or a new one created with a title. A session bound only to a thread gets that thread\'s messages, not the room\'s other messages; replies and permission prompts go into the thread. The room must be one this agent is a member of (or bound here).',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              room: { type: 'string', description: 'The thread\'s room (id, name or unique partial name)' },
+              thread_id: { type: 'string', description: 'An existing thread of that room' },
+              title: { type: 'string', description: `Create a thread with this title (at most ${THREAD_TITLE_MAX_CHARS} characters) and bind it; give this or thread_id, not both` },
+            },
+            required: ['room'],
+          },
+        },
+        {
+          name: 'disconnect_thread',
+          description: 'Remove a thread binding of this session; the thread no longer reaches it, and replies and permission prompts return to the bound room.',
+          inputSchema: { type: 'object', properties: { thread_id: { type: 'string' } }, required: ['thread_id'] },
+        },
+        {
           name: 'status',
-          description: 'Show this channel session: id, host, project, bound rooms (answering or standby), counters, and the last relay or send the gateway refused.',
+          description: 'Show this channel session: id, host, project, bound rooms (answering or standby), bound threads, counters, and the last relay or send the gateway refused.',
           inputSchema: { type: 'object', properties: {} },
         },
       ],
@@ -544,6 +597,10 @@ export class ChannelServer {
             return text(JSON.stringify(await this.toolConnect(String(args.room ?? ''), 'bind')));
           case 'disconnect_room':
             return text(JSON.stringify(await this.toolConnect(String(args.room ?? ''), 'unbind')));
+          case 'connect_thread':
+            return text(JSON.stringify(await this.toolConnectThread(args)));
+          case 'disconnect_thread':
+            return text(JSON.stringify(await this.toolDisconnectThread(String(args.thread_id ?? ''))));
           case 'status':
             return text(JSON.stringify(this.toolStatus(), null, 2));
           default:
@@ -559,19 +616,35 @@ export class ChannelServer {
   private async toolSend(args: Record<string, unknown>): Promise<{ ok: true; room_id: string; thread_id?: string; messageId: string }> {
     const roomId = typeof args.room_id === 'string' ? args.room_id.trim() : '';
     const content = typeof args.text === 'string' ? args.text : '';
-    const threadId = typeof args.thread_id === 'string' && args.thread_id.trim().length > 0 ? args.thread_id.trim() : null;
     if (!roomId) throw new Error('room_id is required');
+    // An explicit thread_id wins, "" asks for the top level. Left out: top level
+    // in a bound room; in a room of which only threads are bound, the thread of
+    // the last message it delivered (defaultThread).
+    const explicit = typeof args.thread_id === 'string' ? args.thread_id.trim() : undefined;
+    const threadId = explicit === undefined ? this.defaultThread(roomId) : explicit.length > 0 ? explicit : null;
     if (content.trim().length === 0) throw new Error('text is required');
     if (content.length > MAX_CONTENT_CHARS) throw new Error(`text is longer than ${MAX_CONTENT_CHARS} characters`);
     let result: { messageId: string };
     try {
       result = await this.deps.gateway.sendMessage(roomId, content, threadId, crypto.randomUUID());
     } catch (err) {
-      const status = recordFailure(this.state.send, err, roomId);
+      const status = recordFailure(this.state.send, err, roomId, undefined, threadId);
       this.deps.log('error', `send_message to room ${roomId} failed${status ? ` with status ${status}` : ''}: ${errorMessage(err)}`);
       throw err;
     }
     return { ok: true, room_id: roomId, ...(threadId ? { thread_id: threadId } : {}), messageId: result.messageId };
+  }
+
+  /**
+   * The thread a reply without thread_id goes into: only for a room that is
+   * not bound (every message it delivers came from a bound thread), the bound
+   * thread of that room the last delivered message (or binding) was in. A
+   * bound room replies at the top level, as before threads existed.
+   */
+  private defaultThread(roomId: string): string | null {
+    if (this.state.boundRooms.has(roomId)) return null;
+    const threadId = this.lastThreadOfRoom.get(roomId);
+    return threadId && this.state.boundThreads.get(threadId)?.roomId === roomId ? threadId : null;
   }
 
   private async toolConnect(query: string, apply: 'bind' | 'unbind'): Promise<{ ok: true; room: { id: string; name: string }; rooms: string[]; answers?: boolean }> {
@@ -582,6 +655,7 @@ export class ChannelServer {
       // Also when already bound: binding again makes this the session that answers the room.
       this.state.boundRooms.add(room.id);
       this.state.activeRoom = room.id;
+      this.state.activeThread = null;
       // Before the gateway knows the session, the room is claimed when it does (activate).
       if (this.active) this.bindings.bind(room.id);
       return { ok: true, room, rooms: [...this.state.boundRooms], answers: this.bindings.answers(room.id) };
@@ -590,6 +664,53 @@ export class ChannelServer {
     this.bindings.unbind(room.id);
     if (this.state.activeRoom === room.id) this.state.activeRoom = [...this.state.boundRooms][0] ?? null;
     return { ok: true, room, rooms: [...this.state.boundRooms] };
+  }
+
+  private async toolConnectThread(args: Record<string, unknown>): Promise<{ ok: true; created: boolean; thread: { id: string; title: string; room: { id: string; name: string } }; threads: string[] }> {
+    const query = typeof args.room === 'string' ? args.room.trim() : '';
+    const existing = typeof args.thread_id === 'string' ? args.thread_id.trim() : '';
+    const title = typeof args.title === 'string' ? args.title.trim() : '';
+    if (!query) throw new Error('room is required');
+    if ((existing.length > 0) === (title.length > 0)) throw new Error('give either thread_id (an existing thread) or title (create a thread), not both and not neither');
+    if (existing && !THREAD_ID_RE.test(existing)) throw new Error('thread_id must match [A-Za-z0-9_-]{1,128}');
+    if (title.length > THREAD_TITLE_MAX_CHARS) throw new Error(`title is longer than ${THREAD_TITLE_MAX_CHARS} characters`);
+    // The gateway takes at most MAX_BOUND_THREADS threads per registration; refuse before creating a thread.
+    if (!this.state.boundThreads.has(existing) && this.state.boundThreads.size >= MAX_BOUND_THREADS) {
+      throw new Error(`this session already has ${MAX_BOUND_THREADS} threads bound, the most the gateway accepts; disconnect_thread one first`);
+    }
+
+    const rooms = await this.deps.gateway.listRooms();
+    const resolved = resolveRoom(rooms, query);
+    // A room the list does not resolve may still be bound (ROOMS names ids unchecked); the check below decides.
+    const room = 'error' in resolved ? { id: query, name: query } : resolved;
+    const refusal = threadRoomRefusal(room.id, rooms.map((r) => r.id), this.state.boundRooms);
+    if (refusal) throw new Error('error' in resolved ? resolved.error : refusal);
+
+    const created = existing.length === 0;
+    const thread = created ? await this.deps.gateway.createThread(room.id, title) : await this.deps.gateway.getThread(room.id, existing);
+    // Triologue answers for the room asked about; a thread of another room is not bound.
+    if (thread.roomId !== room.id) throw new Error(`thread ${thread.id} belongs to another room than ${room.name}`);
+    try {
+      await this.withSession((sessionId) => this.deps.gateway.bind(sessionId, [], [thread.id]));
+    } catch (err) {
+      throw new Error(created ? `thread ${thread.id} was created but binding it failed: ${errorMessage(err)}` : errorMessage(err));
+    }
+    // Also when already bound: the thread becomes the one replies and permission prompts go to.
+    this.state.boundThreads.set(thread.id, { roomId: room.id, title: thread.title });
+    this.state.activeRoom = room.id;
+    this.state.activeThread = thread.id;
+    this.lastThreadOfRoom.set(room.id, thread.id);
+    return { ok: true, created, thread: { id: thread.id, title: thread.title, room }, threads: [...this.state.boundThreads.keys()] };
+  }
+
+  private async toolDisconnectThread(threadId: string): Promise<{ ok: true; thread_id: string; threads: string[] }> {
+    const id = threadId.trim();
+    if (!THREAD_ID_RE.test(id)) throw new Error('thread_id must match [A-Za-z0-9_-]{1,128}');
+    await this.withSession((sessionId) => this.deps.gateway.unbind(sessionId, [], [id]));
+    this.state.boundThreads.delete(id);
+    if (this.state.activeThread === id) this.state.activeThread = null;
+    for (const [room, last] of this.lastThreadOfRoom) if (last === id) this.lastThreadOfRoom.delete(room);
+    return { ok: true, thread_id: id, threads: [...this.state.boundThreads.keys()] };
   }
 
   private toolStatus() {
@@ -609,8 +730,11 @@ export class ChannelServer {
       // Bound rooms this session answers, and the ones a more recently bound session on this machine answers.
       answering,
       standby: rooms.filter((room) => !answering.includes(room)),
+      threads: [...this.state.boundThreads].map(([id, t]) => ({ id, room: t.roomId, title: t.title })),
       activeRoom: this.state.activeRoom,
+      activeThread: this.state.activeThread,
       permissionRoom: this.permissionRoom(),
+      permissionThread: this.permissionTarget()?.threadId ?? null,
       delivered: this.state.delivered,
       dropped: this.state.dropped,
       pendingPermissions: [...this.state.pendingPermissions.keys()],
@@ -622,10 +746,10 @@ export class ChannelServer {
 }
 
 /** Count a refused call and keep the last one; returns the HTTP status when the gateway gave one. */
-function recordFailure(record: FailureRecord, err: unknown, room: string, requestId?: string): number | null {
+function recordFailure(record: FailureRecord, err: unknown, room: string, requestId?: string, threadId?: string | null): number | null {
   const status = err instanceof GatewayError ? err.status : null;
   record.failures += 1;
-  record.last = { at: new Date().toISOString(), status, error: errorMessage(err), room, ...(requestId ? { requestId } : {}) };
+  record.last = { at: new Date().toISOString(), status, error: errorMessage(err), room, ...(threadId ? { threadId } : {}), ...(requestId ? { requestId } : {}) };
   return status;
 }
 

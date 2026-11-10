@@ -64,6 +64,31 @@ export function isUnknownSession(err: unknown): boolean {
   return err instanceof GatewayError && err.status === 404;
 }
 
+/** Thread ids as the gateway's bind route accepts them. */
+export const THREAD_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+/** What Triologue accepts as a thread title. */
+export const THREAD_TITLE_MAX_CHARS = 200;
+/**
+ * How many threads one session may have bound. The gateway's connect and bind
+ * routes take at most 50 ids per call and a registration sends all bound
+ * threads in one body, so a 51st binding would make every re-registration fail.
+ */
+export const MAX_BOUND_THREADS = 50;
+
+export interface ThreadInfo {
+  id: string;
+  title: string;
+  roomId: string;
+}
+
+function parseThread(body: unknown): ThreadInfo {
+  const b = (body ?? {}) as Record<string, unknown>;
+  if (typeof b.id !== 'string' || !THREAD_ID_RE.test(b.id) || typeof b.roomId !== 'string' || b.roomId.length === 0) {
+    throw new Error('Triologue answered with something that is not a thread');
+  }
+  return { id: b.id, title: typeof b.title === 'string' ? b.title : '', roomId: b.roomId };
+}
+
 export interface SessionInfo {
   sessionId: string;
   status?: string;
@@ -154,6 +179,20 @@ export class GatewayClient {
     const rooms = await this.call<Array<{ id: string; name: string }> | { rooms: Array<{ id: string; name: string }> }>('GET', `${this.opts.triologueUrl}/api/rooms`);
     const list = Array.isArray(rooms) ? rooms : rooms.rooms ?? [];
     return list.map((r) => ({ id: r.id, name: r.name }));
+  }
+
+  // ── threads (Triologue API; room membership authorizes, the BYOA token passes as for rooms) ──
+
+  /** One thread of a room: 403 when the agent is not a member of the room, 404 when the room has no such thread. */
+  async getThread(roomId: string, threadId: string): Promise<ThreadInfo> {
+    const thread = await this.call<unknown>('GET', `${this.opts.triologueUrl}/api/rooms/${encodeURIComponent(roomId)}/threads/${encodeURIComponent(threadId)}`);
+    return parseThread(thread);
+  }
+
+  /** Create a thread in a room (201); the title is at most THREAD_TITLE_MAX_CHARS characters. */
+  async createThread(roomId: string, title: string): Promise<ThreadInfo> {
+    const thread = await this.call<unknown>('POST', `${this.opts.triologueUrl}/api/rooms/${encodeURIComponent(roomId)}/threads`, { title });
+    return parseThread(thread);
   }
 
   /** The agent's own identity (username), from the gateway's status route. */

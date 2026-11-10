@@ -9,8 +9,10 @@
  * username), the channel notification, the reply tool,
  * room binding, presence from a hook post that carries the listener's secret
  * (and the refusal of one that does not), the permission relay round trip, a
- * relay and a send the gateway refuses, and re-registration after the
- * gateway forgot the session.
+ * relay and a send the gateway refuses, re-registration after the
+ * gateway forgot the session, and thread bindings (connect_thread: a session
+ * bound only to a thread gets that thread with its title, a reply and a
+ * permission prompt go into it, disconnect_thread returns to the room).
  */
 import fs from 'node:fs';
 import http from 'node:http';
@@ -33,7 +35,12 @@ const received = {
   connect: [] as Array<Record<string, unknown>>,
   messages: [] as Array<Record<string, unknown>>,
   presence: [] as Array<Record<string, unknown>>,
+  /** Every bind and unbind call, in order. */
   bind: [] as Array<Record<string, unknown>>,
+  /** The unbind calls only. */
+  unbind: [] as Array<Record<string, unknown>>,
+  /** The thread routes of Triologue the server called, as `<method> <path>`. */
+  threadRoutes: [] as string[],
   ended: 0,
   streamQueries: [] as string[],
 };
@@ -73,13 +80,26 @@ const gateway = http.createServer(async (req, res) => {
   if (url.pathname.startsWith('/byoa/sessions/sess-test') && forgotten) { await readBody(req); return json(404, { error: 'Unknown session' }); }
   if (url.pathname === '/byoa/sessions/sess-test/heartbeat') { res.writeHead(204).end(); return; }
   if (url.pathname === '/byoa/sessions/sess-test/presence') { received.presence.push(await readBody(req)); res.writeHead(204).end(); return; }
-  if (url.pathname === '/byoa/sessions/sess-test/bind') { const b = await readBody(req); received.bind.push(b); return json(200, { rooms: b.rooms, threads: [] }); }
+  if (url.pathname === '/byoa/sessions/sess-test/bind') {
+    const b = await readBody(req);
+    received.bind.push(b);
+    if (req.method === 'DELETE') received.unbind.push(b);
+    return json(200, { rooms: b.rooms, threads: b.threads });
+  }
   if (url.pathname === '/byoa/sessions/sess-test' && req.method === 'DELETE') { received.ended += 1; res.writeHead(204).end(); return; }
   if (url.pathname === '/byoa/sse/messages') {
     const body = await readBody(req);
     if (refuseSends) return json(502, { error: 'Failed to deliver message', detail: 'Request failed with status code 429' });
     received.messages.push(body);
     return json(201, { messageId: `m-${received.messages.length}`, status: 'sent' });
+  }
+  const threadRoute = /^\/api\/rooms\/([^/]+)\/threads(?:\/([^/]+))?$/.exec(url.pathname);
+  if (threadRoute) {
+    received.threadRoutes.push(`${req.method} ${url.pathname}`);
+    const [, room, thread] = threadRoute;
+    if (req.method === 'POST') { const b = await readBody(req); return json(201, { id: 'th-new', title: b.title, roomId: room }); }
+    if (room === 'room-1' && thread === 'th-1') return json(200, { id: 'th-1', title: 'Fix the login bug', roomId: 'room-1' });
+    return json(404, { error: 'Thread not found' });
   }
   if (url.pathname === '/api/rooms') return json(200, [{ id: 'room-1', name: 'backend' }, { id: 'room-2', name: 'ops' }]);
   if (url.pathname === '/byoa/sse/stream') {
@@ -198,9 +218,9 @@ describe('channel over stdio', () => {
     expect(stderr).not.toContain('user-mallory');
   });
 
-  it('offers the four tools', async () => {
+  it('offers the six tools', async () => {
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(['connect_room', 'disconnect_room', 'send_message', 'status']);
+    expect(tools.map((t) => t.name).sort()).toEqual(['connect_room', 'connect_thread', 'disconnect_room', 'disconnect_thread', 'send_message', 'status']);
   });
 
   it('delivers nothing while no room is bound, and relays no permission prompt', async () => {
@@ -385,5 +405,97 @@ describe('channel over stdio', () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(channelEvents).toHaveLength(2);
     expect((await callTool('status', {})).body).toMatchObject({ rooms: [], answering: [], standby: [] });
+  });
+  it('thread bindings: a session bound only to a thread gets that thread with its title, replies and prompts go into it, and disconnecting returns to the room', async () => {
+    const delivered = channelEvents.length;
+    const sent = received.messages.length;
+    const lastSent = () => received.messages.at(-1) as Record<string, unknown>;
+
+    // A thread of a room the agent is not a member of, or one that does not exist, is not bound.
+    const unknownRoom = await callTool('connect_thread', { room: 'room-7', thread_id: 'th-1' });
+    expect(unknownRoom.isError).toBe(true);
+    expect(unknownRoom.body).toBe('connect_thread failed: no room matches "room-7"');
+    const missing = await callTool('connect_thread', { room: 'backend', thread_id: 'th-404' });
+    expect(missing.isError).toBe(true);
+    expect(String(missing.body)).toMatch(/^connect_thread failed with status 404: .*Thread not found/);
+    expect(received.threadRoutes).toEqual(['GET /api/rooms/room-1/threads/th-404']);
+    const bindsBefore = received.bind.length;
+
+    // Bind the thread (and nothing else).
+    const bound = await callTool('connect_thread', { room: 'backend', thread_id: 'th-1' });
+    expect(bound.body).toEqual({ ok: true, created: false, thread: { id: 'th-1', title: 'Fix the login bug', room: { id: 'room-1', name: 'backend' } }, threads: ['th-1'] });
+    expect(received.threadRoutes.at(-1)).toBe('GET /api/rooms/room-1/threads/th-1');
+    expect(received.bind.slice(bindsBefore)).toEqual([{ rooms: [], threads: ['th-1'] }]);
+    expect(await callTool('status', {})).toMatchObject({ body: { rooms: [], threads: [{ id: 'th-1', room: 'room-1', title: 'Fix the login bug' }], activeThread: 'th-1', permissionRoom: 'room-1', permissionThread: 'th-1' } });
+
+    // A message in the thread is delivered with the thread meta ...
+    pushEvent({ id: 't1', room: 'room-1', roomName: 'backend', threadId: 'th-1', sender: 'lan', senderId: 'user-lan', senderType: 'HUMAN', content: 'please fix the login', timestamp: '2026-11-05T07:01:00.000Z' });
+    await waitFor(() => channelEvents.length === delivered + 1, 'thread message');
+    expect(channelEvents.at(-1)).toEqual({
+      content: 'please fix the login',
+      meta: { room: 'room-1', room_name: 'backend', thread_id: 'th-1', thread_title: 'Fix the login bug', message_id: 't1', event_id: String(eventSeq), sender: 'lan', sender_id: 'user-lan', sender_type: 'HUMAN' },
+    });
+
+    // ... a top-level message of the same room and another thread of it are not.
+    pushEvent({ id: 't2', room: 'room-1', threadId: null, sender: 'lan', senderId: 'user-lan', senderType: 'HUMAN', content: 'top-level', timestamp: '2026-11-05T07:01:01.000Z' });
+    pushEvent({ id: 't3', room: 'room-1', threadId: 'th-2', sender: 'lan', senderId: 'user-lan', senderType: 'HUMAN', content: 'other thread', timestamp: '2026-11-05T07:01:02.000Z' });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(channelEvents).toHaveLength(delivered + 1);
+    expect((await callTool('status', {})).body).toMatchObject({ delivered: delivered + 1, dropped: { 'thread-not-bound': 2 } });
+
+    // A reply without thread_id lands in the thread.
+    const reply = await callTool('send_message', { room_id: 'room-1', text: 'On it.' });
+    expect(reply.body).toMatchObject({ ok: true, room_id: 'room-1', thread_id: 'th-1' });
+    expect(received.messages).toHaveLength(sent + 1);
+    expect(lastSent()).toMatchObject({ roomId: 'room-1', content: 'On it.', threadId: 'th-1' });
+
+    // A permission request is posted into the thread, and only a "yes" from the thread is the verdict.
+    const verdictsBefore = verdicts.length;
+    await client.notification({
+      method: 'notifications/claude/channel/permission_request',
+      params: { request_id: 'thrdq', tool_name: 'Bash', description: 'Run the tests', input_preview: 'npm test' },
+    });
+    await waitFor(() => received.messages.length === sent + 2, 'prompt in the thread');
+    expect(lastSent()).toMatchObject({ roomId: 'room-1', threadId: 'th-1', idempotencyKey: 'perm-thrdq' });
+    expect(String(lastSent().content)).toContain('yes thrdq');
+    pushEvent({ id: 't4', room: 'room-1', threadId: null, sender: 'lan', senderId: 'user-lan', senderType: 'HUMAN', content: 'yes thrdq', timestamp: '2026-11-05T07:01:03.000Z' });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(verdicts).toHaveLength(verdictsBefore);
+    pushEvent({ id: 't5', room: 'room-1', threadId: 'th-1', sender: 'lan', senderId: 'user-lan', senderType: 'HUMAN', content: 'yes thrdq', timestamp: '2026-11-05T07:01:04.000Z' });
+    await waitFor(() => verdicts.length === verdictsBefore + 1, 'verdict from the thread');
+    expect(verdicts.at(-1)).toEqual({ request_id: 'thrdq', behavior: 'allow' });
+    expect(channelEvents).toHaveLength(delivered + 1);
+
+    // Bind the room as well, then let go of the thread: back to room behaviour.
+    await callTool('connect_room', { room: 'backend' });
+    const off = await callTool('disconnect_thread', { thread_id: 'th-1' });
+    expect(off.body).toEqual({ ok: true, thread_id: 'th-1', threads: [] });
+    expect(received.unbind.at(-1)).toEqual({ rooms: [], threads: ['th-1'] });
+
+    await callTool('send_message', { room_id: 'room-1', text: 'Back in the room.' });
+    expect(lastSent()).toMatchObject({ roomId: 'room-1', content: 'Back in the room.' });
+    expect(lastSent()).not.toHaveProperty('threadId');
+    await client.notification({
+      method: 'notifications/claude/channel/permission_request',
+      params: { request_id: 'roomq', tool_name: 'Bash', description: 'Run it', input_preview: 'make' },
+    });
+    await waitFor(() => lastSent().idempotencyKey === 'perm-roomq', 'prompt in the room');
+    expect(lastSent()).toMatchObject({ roomId: 'room-1' });
+    expect(lastSent()).not.toHaveProperty('threadId');
+
+    pushEvent({ id: 't6', room: 'room-1', threadId: null, sender: 'lan', senderId: 'user-lan', senderType: 'HUMAN', content: 'room message again', timestamp: '2026-11-05T07:01:05.000Z' });
+    await waitFor(() => channelEvents.length === delivered + 2, 'top-level message after the disconnect');
+    expect(channelEvents.at(-1)?.meta).toMatchObject({ room: 'room-1', thread_id: '' });
+    expect(channelEvents.at(-1)?.meta).not.toHaveProperty('thread_title');
+    expect((await callTool('status', {})).body).toMatchObject({ threads: [], activeThread: null, permissionThread: null });
+    await callTool('disconnect_room', { room: 'backend' });
+  });
+
+  it('connect_thread with a title creates the thread through Triologue and binds it', async () => {
+    const created = await callTool('connect_thread', { room: 'ops', title: 'Rotate the keys' });
+    expect(created.body).toEqual({ ok: true, created: true, thread: { id: 'th-new', title: 'Rotate the keys', room: { id: 'room-2', name: 'ops' } }, threads: ['th-new'] });
+    expect(received.threadRoutes.at(-1)).toBe('POST /api/rooms/room-2/threads');
+    expect(received.bind.at(-1)).toEqual({ rooms: [], threads: ['th-new'] });
+    await callTool('disconnect_thread', { thread_id: 'th-new' });
   });
 });

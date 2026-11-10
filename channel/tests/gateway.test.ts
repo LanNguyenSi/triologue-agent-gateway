@@ -67,4 +67,22 @@ describe('GatewayClient', () => {
     expect(await b.listRooms()).toEqual([{ id: 'r2', name: 'B' }]);
     expect(String((fetchImpl as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0])).toBe('http://trio/api/rooms');
   });
+  it('reads and creates threads through the Triologue routes of the room, with the ids escaped and the answer checked', async () => {
+    const calls: Array<{ method: string | undefined; url: string; body: unknown }> = [];
+    const { gw } = client((url, init) => {
+      calls.push({ method: init.method, url, body: init.body ? JSON.parse(String(init.body)) : undefined });
+      return { status: init.method === 'POST' ? 201 : 200, body: { id: 'th-1', title: 'Fix it', roomId: 'room 1', isResolved: false, messageCount: 0 } };
+    });
+    expect(await gw.getThread('room 1', 'th-1')).toEqual({ id: 'th-1', title: 'Fix it', roomId: 'room 1' });
+    expect(await gw.createThread('room 1', 'Fix it')).toEqual({ id: 'th-1', title: 'Fix it', roomId: 'room 1' });
+    expect(calls).toEqual([
+      { method: 'GET', url: 'http://trio/api/rooms/room%201/threads/th-1', body: undefined },
+      { method: 'POST', url: 'http://trio/api/rooms/room%201/threads', body: { title: 'Fix it' } },
+    ]);
+
+    const { gw: odd } = client(() => ({ status: 200, body: { id: 'a/b', roomId: 'r1' } }));
+    await expect(odd.getThread('r1', 'x')).rejects.toThrow('not a thread');
+    const { gw: refused } = client(() => ({ status: 403, body: { error: 'Access denied to this room' } }));
+    await expect(refused.getThread('r1', 'x')).rejects.toMatchObject({ status: 403 });
+  });
 });
