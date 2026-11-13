@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Security
 
 - **Bridge: startup refuses a `claude` that lacks the tool-restriction flags.** On a host whose `claude` binary is older than those flags the bridge only failed on every @mention: the run exits with an error before any model call (observed with Claude Code 2.1.306), so the bridge kept looking healthy and logged one warn line per mention. The bridge now runs `<CLAUDE_CMD> --help` once at startup, before authenticating (10-second bound, stdout and stderr read together), and refuses to start (an error naming every missing flag and the configured command, exit 1) unless the help output lists `--tools`, `--permission-prompts`, `--setting-sources` and the `dontAsk` permission mode as whole tokens; a missing binary, a non-zero `--help` exit, and a `--help` run that hangs past the timeout (the child is killed) each refuse the same way. `bridge/src/claude-preflight.ts`; the `--help` child gets the same allowlisted environment as a real run. See `bridge/README.md` ("Tool restriction").
+- **`@hono/node-server` 2.1.8** (GHSA-jpvv-r467-5p4w): the root lockfile resolves 2.1.8 (was 2.1.5), which answers a request path containing a raw backslash with 400 instead of treating the backslash as `/`.
 
 ## [0.6.0] - 2026-11-07
 
