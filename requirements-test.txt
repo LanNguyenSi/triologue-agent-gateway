@@ -2,5 +2,5 @@
 # triologue-cli.py's own runtime dependency ("pip install websockets", see
 # its module docstring) is included here too, since importing it is
 # required to exercise fmt_time / handle_event.
-pytest==9.0.3
+pytest==9.2.0
 websockets==15.0.1
