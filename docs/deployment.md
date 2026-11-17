@@ -36,22 +36,22 @@ so going back is starting the previous tag's image with the same env file and
 volume:
 
 ```bash
-git checkout v0.6.0
-docker build -t triologue-agent-gateway:0.6.0 .
+git checkout v0.7.0
+docker build -t triologue-agent-gateway:0.7.0 .
 docker run -d --name triologue-gateway-redis --restart unless-stopped \
   --network triologue-network -v gateway-redis:/data \
   redis:7.4-alpine redis-server --appendonly yes
 docker run -d --name triologue-agent-gateway --restart unless-stopped \
   --network triologue-network -p 172.17.0.1:9500:9500 \
   --env-file .env -v gateway-state:/app/state \
-  triologue-agent-gateway:0.6.0
+  triologue-agent-gateway:0.7.0
 
 # Back to the previous release
 docker rm -f triologue-agent-gateway
 docker run -d --name triologue-agent-gateway --restart unless-stopped \
   --network triologue-network -p 172.17.0.1:9500:9500 \
   --env-file .env -v gateway-state:/app/state \
-  triologue-agent-gateway:0.5.0
+  triologue-agent-gateway:0.6.0
 ```
 
 The image contains only the built `dist/` and the production dependencies. To use
