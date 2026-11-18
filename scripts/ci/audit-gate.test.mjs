@@ -21,7 +21,7 @@ import { addDays, todayUtc } from './audit-gate.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(HERE, 'audit-gate.mjs');
 const FIXTURES = path.join(HERE, 'fixtures');
-const BRACES_ID = 'GHSA-fc5q-39xc-vjpf';
+const PICOMATCH_ID = 'GHSA-fc5q-39xc-vjpf';
 const OTHER_ID = 'GHSA-xxxx-xxxx-xxxx';
 
 const realReport = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'audit.stdout.json'), 'utf8'));
@@ -29,7 +29,7 @@ const outageStdout = fs.readFileSync(path.join(FIXTURES, 'outage.stdout.json'), 
 const outageStderr = fs.readFileSync(path.join(FIXTURES, 'outage.stderr.txt'), 'utf8');
 
 function allowlist(reviewBy = addDays(todayUtc(), 30)) {
-  return JSON.stringify({ entries: [{ id: BRACES_ID, reason: 'test entry', reviewBy }] });
+  return JSON.stringify({ entries: [{ id: PICOMATCH_ID, reason: 'test entry', reviewBy }] });
 }
 
 // npm derives metadata.vulnerabilities from the same package map the gate walks, and the
@@ -92,7 +92,7 @@ function run(script, { allowlistText, stdout, stderr = '', status }) {
         '--stdout', path.join(dir, 'out.json'),
         '--stderr', path.join(dir, 'err.txt'),
       ],
-      { encoding: 'utf8', cwd: dir },
+      { encoding: 'utf8', cwd: dir, timeout: 20000, killSignal: 'SIGKILL' },
     );
     return { code: result.status, out: result.stdout, err: result.stderr };
   } finally {
@@ -105,7 +105,7 @@ test('fixture sanity: the real report carries the allowlisted advisory', () => {
   const urls = Object.values(realReport.vulnerabilities).flatMap((v) =>
     v.via.filter((x) => typeof x === 'object').map((x) => x.url),
   );
-  assert.ok(urls.includes(`https://github.com/advisories/${BRACES_ID}`));
+  assert.ok(urls.includes(`https://github.com/advisories/${PICOMATCH_ID}`));
 });
 
 test('allowlisted advisory only: exit 0, entry printed, CLEAN', () => {
@@ -115,7 +115,7 @@ test('allowlisted advisory only: exit 0, entry printed, CLEAN', () => {
     status: 1,
   });
   assert.equal(code, 0, out + err);
-  assert.match(out, new RegExp(`excepted by allowlist: ${BRACES_ID}`));
+  assert.match(out, new RegExp(`excepted by allowlist: ${PICOMATCH_ID}`));
   assert.match(out, /npm audit gate: CLEAN/);
 });
 
@@ -138,12 +138,12 @@ test('expired entry: exit 1 naming the id, never CLEAN', () => {
     status: 1,
   });
   assert.equal(code, 1, out);
-  assert.match(out, new RegExp(`allowlist entry ${BRACES_ID} expired`));
+  assert.match(out, new RegExp(`allowlist entry ${PICOMATCH_ID} expired`));
   assert.doesNotMatch(out, /npm audit gate: CLEAN/);
 });
 
 test('malformed allowlist: exit 3', () => {
-  for (const allowlistText of ['{ not json', JSON.stringify({ entries: [{ id: BRACES_ID }] })]) {
+  for (const allowlistText of ['{ not json', JSON.stringify({ entries: [{ id: PICOMATCH_ID }] })]) {
     const { code, out } = run(SCRIPT, {
       allowlistText,
       stdout: JSON.stringify(realReport),
@@ -161,6 +161,59 @@ test('reviewBy more than 90 days out: exit 3 (malformed)', () => {
     status: 1,
   });
   assert.equal(code, 3, out);
+});
+
+// Boundary and rejection branches of the allowlist and the report walk, one case each.
+function gate(allowlistText, report = realReport, status = 1) {
+  return run(SCRIPT, { allowlistText, stdout: JSON.stringify(report), status });
+}
+
+test('reviewBy equal to today is still valid: exit 0', () => {
+  const { code, out } = gate(allowlist(todayUtc()));
+  assert.equal(code, 0, out);
+  assert.match(out, /npm audit gate: CLEAN/);
+});
+
+test('reviewBy exactly 90 days out is accepted: exit 0', () => {
+  const { code, out } = gate(allowlist(addDays(todayUtc(), 90)));
+  assert.equal(code, 0, out);
+});
+
+test('allowlisted advisory whose chain names a package missing from the report: exit 1', () => {
+  const copy = structuredClone(realReport);
+  copy.vulnerabilities.picomatch.via.push('ghost-package');
+  const { code, out } = gate(allowlist(), copy);
+  assert.equal(code, 1, out);
+  assert.match(out, /unresolvable:ghost-package/);
+});
+
+test('npm status 1 with a report holding only a moderate advisory: exit 3', () => {
+  const moderate = structuredClone(realReport);
+  moderate.vulnerabilities = {
+    picomatch: { ...realReport.vulnerabilities.picomatch, severity: 'moderate', via: [{ ...realReport.vulnerabilities.picomatch.via[0], severity: 'moderate' }] },
+  };
+  const { code, out } = gate(allowlist(), withTally(moderate), 1);
+  assert.equal(code, 3, out);
+  assert.match(out, /holds no HIGH or CRITICAL advisory/);
+});
+
+test('npm status 2 with a valid report: exit 3', () => {
+  const { code, out } = gate(allowlist(), realReport, 2);
+  assert.equal(code, 3, out);
+  assert.match(out, /exited with status 2/);
+});
+
+test('allowlist with an unknown top-level key: exit 3', () => {
+  const { code, out } = gate(JSON.stringify({ entries: [], extra: true }));
+  assert.equal(code, 3, out);
+  assert.match(out, /unknown top-level key/);
+});
+
+test('allowlist with a duplicate id: exit 3', () => {
+  const entry = { id: PICOMATCH_ID, reason: 'test entry', reviewBy: addDays(todayUtc(), 30) };
+  const { code, out } = gate(JSON.stringify({ entries: [entry, entry] }));
+  assert.equal(code, 3, out);
+  assert.match(out, /duplicate id/);
 });
 
 test('npm error JSON without a report (registry unreachable): exit 2, OUTAGE', () => {
@@ -188,7 +241,6 @@ test('script spawned through a symlink on the findings fixture: exit 1 with a FI
 // Hardened gate: metadata cross-check and sanitised npm stderr. These cases run the
 // script as a child process like the ones above, on this tree's real npm output.
 const HG_BASES = [['audit.stdout.json', realReport]];
-const HG_ID = 'GHSA-fc5q-39xc-vjpf';
 
 function hgRun({ report, stdout, stderr = '', status = 1, argv }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-gate-hardened-'));
@@ -197,7 +249,7 @@ function hgRun({ report, stdout, stderr = '', status = 1, argv }) {
     review.setUTCDate(review.getUTCDate() + 30);
     fs.writeFileSync(
       path.join(dir, 'allow.json'),
-      JSON.stringify({ entries: [{ id: HG_ID, reason: 'test entry', reviewBy: review.toISOString().slice(0, 10) }] }),
+      JSON.stringify({ entries: [{ id: PICOMATCH_ID, reason: 'test entry', reviewBy: review.toISOString().slice(0, 10) }] }),
     );
     fs.writeFileSync(path.join(dir, 'out.json'), stdout ?? JSON.stringify(report));
     fs.writeFileSync(path.join(dir, 'err.txt'), stderr);
@@ -209,7 +261,7 @@ function hgRun({ report, stdout, stderr = '', status = 1, argv }) {
           '--stdout', path.join(dir, 'out.json'),
           '--stderr', path.join(dir, 'err.txt'),
         ];
-    const result = spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8' });
+    const result = spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', timeout: 20000, killSignal: 'SIGKILL' });
     return { code: result.status, text: `${result.stdout}${result.stderr}` };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -357,6 +409,8 @@ function runWrapper({ npmStdout = '', npmStderr = '', npmStatus = 1, hang = fals
     const result = spawnSync('bash', ['--noprofile', '--norc', '-eo', 'pipefail', WRAPPER], {
       encoding: 'utf8',
       cwd: dir,
+      timeout: 20000,
+      killSignal: 'SIGKILL',
       env: {
         PATH: `${bin}:${process.env.PATH}`,
         AUDIT_ALLOWLIST: path.join(dir, 'allow.json'),

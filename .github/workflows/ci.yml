@@ -119,7 +119,7 @@ jobs:
       # advisory in its dependency chain is allowlisted. One file serves all
       # four lockfile trees; an entry that matches nothing in a tree only warns.
       - name: audit gate self-test
-        if: matrix.node-version == '22.x'
+        timeout-minutes: 2
         run: node --test scripts/ci/audit-gate.test.mjs
       - name: npm audit (full report, non-blocking)
         timeout-minutes: 2
