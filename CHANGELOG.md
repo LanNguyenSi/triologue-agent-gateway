@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Security
 
-- CI now runs the same classifying npm audit gate on `channel/` as on the root, `bridge/` and `sdk/`, and all four gates share one script (`scripts/ci/run-audit-gate.sh` with the classifier `scripts/ci/audit-gate.mjs`, self-tested in CI). The gates read `npm audit --json` and keep the four outcomes (clean, findings, registry outage, unclassified) under the 60 s bound. `.github/audit-allowlist.json` excepts GHSA-fc5q-39xc-vjpf (picomatch ReDoS, dev-only through vitest, no patched version yet) by exact advisory id, with a review date of 2026-12-18: after that date the entry fails the gate instead of suppressing, and any other high or critical advisory still fails it.
+- CI now runs the same classifying npm audit gate on `channel/` as on the root, `bridge/` and `sdk/`, and all four gates share one script (`scripts/ci/run-audit-gate.sh` with the classifier `scripts/ci/audit-gate.mjs`, self-tested in CI). The gates read `npm audit --json` and keep the four outcomes (clean, findings, registry outage, unclassified) under the 60 s bound. Any high or critical advisory fails the gate; `.github/audit-allowlist.json` can except an advisory by exact id with a review date, after which the entry fails the gate instead of suppressing.
+- Removed the `GHSA-fc5q-39xc-vjpf` (picomatch) entry from `.github/audit-allowlist.json`: GitHub withdrew the advisory on 2026-11-18, and `npm audit` no longer reports it in this repo's lockfile tree(s), so the gate stays CLEAN with an empty `entries` list. `scripts/ci/audit-gate.mjs` is unchanged.
 
 ## [0.7.0] - 2026-11-17
 
