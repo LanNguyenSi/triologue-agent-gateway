@@ -30,6 +30,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const axiosMocks = vi.hoisted(() => ({
@@ -255,14 +256,19 @@ describe('getAgentRooms', () => {
     expect(rejection!.message).toContain('401');
     // MUTATION GUARD M6c: token in the message → fails.
     expect(rejection!.message).not.toContain('byoa_agent_tok');
-    expect(Object.values(rejection as object).join(' ')).not.toContain('byoa_agent_tok');
+    expect(inspect(rejection, { depth: null, showHidden: true })).not.toContain('byoa_agent_tok');
   });
 
   it('rejects with the network error code on a connection failure', async () => {
     axiosMocks.get.mockRejectedValue(Object.assign(new Error('connect failed'), { code: 'ECONNREFUSED' }));
     const bridge = makeBridge();
 
-    await expect(bridge.getAgentRooms('byoa_agent_tok')).rejects.toThrow(/ECONNREFUSED/);
+    const rejection = await bridge.getAgentRooms('byoa_agent_tok').then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(rejection!.message).toMatch(/ECONNREFUSED/);
+    expect(inspect(rejection, { depth: null, showHidden: true })).not.toContain('byoa_agent_tok');
   });
 
   it('rejects with a generic message when the error has neither status nor code', async () => {
@@ -274,6 +280,7 @@ describe('getAgentRooms', () => {
       (e: Error) => e,
     );
     expect(rejection!.message).not.toContain('byoa_agent_tok');
+    expect(inspect(rejection, { depth: null, showHidden: true })).not.toContain('byoa_agent_tok');
   });
 });
 
