@@ -30,7 +30,7 @@ sources:
 ## Entry points
 
 - `main()`, `src/index.ts`, guarded by `isMainModule`
-  (`src/index.ts:808-811#"main();"`).
+  (`src/index.ts:814-817#"main();"`).
 - `start()`, `src/index.ts`, called by `main()` after local state is loaded.
 - Container: `node dist/index.js` (`Dockerfile:23#"dist/index.js"`).
 
@@ -67,12 +67,12 @@ steps without the guard:
 ## The module-is-main guard and its trap
 
 `isMainModule` compares `process.argv[1]` with the module's own file path
-(`src/index.ts:808-811#"main();"`). That path always carries its extension,
+(`src/index.ts:814-817#"main();"`). That path always carries its extension,
 while `argv[1]` is the absolute path of what was typed, without extension
 resolution, so `node dist/index` (without `.js`) never matches: `main()`
 does not run, and the Redis clients opened at import keep the event loop
 alive, so the process stays up without listening
-(`src/index.ts:796-805#"Always invoke with the explicit"`). The Docker `CMD`
+(`src/index.ts:802-811#"Always invoke with the explicit"`). The Docker `CMD`
 uses the explicit extension (`Dockerfile:23#"dist/index.js"`).
 
 ## Startup order
@@ -80,35 +80,35 @@ uses the explicit extension (`Dockerfile:23#"dist/index.js"`).
 `main()` runs these steps in order:
 
 1. Exits with code 1 when `GATEWAY_TOKEN` is unset
-   (`src/index.ts:718-720#"process.exit(1);"`).
+   (`src/index.ts:724-726#"process.exit(1);"`).
 2. Loads `AGENTS_CONFIG`, builds the token index and loads the read tracker
-   (`src/index.ts:780-782#"loadReadTracker();"`), then calls `start()`
-   (`src/index.ts:784#"await start();"`).
+   (`src/index.ts:786-788#"loadReadTracker();"`), then calls `start()`
+   (`src/index.ts:790#"await start();"`).
 3. `start()` connects the bridge: it authenticates, with a fresh login
    unless the cached session token is still valid
-   (`src/triologue-bridge.ts:327-348#"// Fresh login"`), then
+   (`src/triologue-bridge.ts:331-352#"// Fresh login"`), then
    opens the Socket.io connection
    (`src/triologue-bridge.ts:71-73#"await this.createSocket();"`), which
    rejects after 10 seconds without a connection
    (`src/triologue-bridge.ts:160-163#"reject(new Error('Connection timeout (10s)'));"`).
    A failure here exits the process with code 1; on success the bridge is
    handed to the SSE and MCP modules
-   (`src/index.ts:713-720#"process.exit(1);"`).
+   (`src/index.ts:719-726#"process.exit(1);"`).
 4. Awaits the first agent sync, which also starts the 60-second sync timer
-   (`src/index.ts:724#"await startSync();"`). A failed first sync does not
+   (`src/index.ts:730#"await startSync();"`). A failed first sync does not
    stop startup.
-5. Starts listening on `PORT` (`src/index.ts:726#"server.listen(PORT, () => {"`)
+5. Starts listening on `PORT` (`src/index.ts:732#"server.listen(PORT, () => {"`)
    and updates the agent counts in the metrics every 30 seconds
-   (`src/index.ts:683-686#"}, 30_000);"`).
+   (`src/index.ts:689-692#"}, 30_000);"`).
 6. Registers `SIGTERM` and `SIGINT` handlers that stop the sync, disconnect
    the bridge, flush the metrics, end the SSE streams, close WebSocket
    clients and exit with code 0
-   (`src/index.ts:754-765#"process.on('SIGINT', shutdown);"`).
+   (`src/index.ts:760-771#"process.on('SIGINT', shutdown);"`).
 
 After the first connection the bridge reconnects on its own, with a delay
 that starts at 2 seconds and doubles up to 30 seconds
 (`src/triologue-bridge.ts:53-54#"private baseReconnectDelay = 2_000;"`,
-`src/triologue-bridge.ts:267-283#"setTimeout(() => this.doReconnect(), delay);"`).
+`src/triologue-bridge.ts:271-287#"setTimeout(() => this.doReconnect(), delay);"`).
 It drops the cached session token first, except after a disconnect that
 Triologue did not initiate
 (`src/triologue-bridge.ts:106-109#"this.scheduleReconnect(reason === 'io server disconnect');"`).
@@ -152,7 +152,7 @@ again. Each writer catches the error: the read tracker and the metrics flush log
 (`src/read-tracker.ts:40-44#"Failed to save read tracker"`,
 `src/metrics.ts:124-128#"Failed to flush metrics"`), and the session-token
 cache write is dropped silently
-(`src/triologue-bridge.ts:358-364#"} catch {}"`). The state then lives in
+(`src/triologue-bridge.ts:362-368#"} catch {}"`). The state then lives in
 memory only and is gone after a restart. Without a volume the files live in
 the container and are lost when it is removed. The image contains only
 `package.json`, the lockfile, `dist/` and the production dependencies

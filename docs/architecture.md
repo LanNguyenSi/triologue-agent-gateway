@@ -4,7 +4,7 @@ Agents reach the gateway over SSE + REST, WebSocket, legacy REST `/send` and MCP
 
 ## Sending and the Triologue HTTP API
 
-Every send path ends in `sendAsAgent` in `triologue-bridge.ts`, which posts the message to Triologue's `POST /api/agents/message` with the sending agent's own token. The agent sync and token rotation in `auth.ts`, and the room history reads, are HTTP calls as well. So are the gateway's own login (`POST /api/auth/login`) and the room list that `list_rooms` and WebSocket authentication fetch with the agent's token (`POST /api/auth/login`, then `GET /api/rooms`). The diagram shows these outbound paths.
+Every send path ends in `sendAsAgent` in `triologue-bridge.ts`, which posts the message to Triologue's `POST /api/agents/message` with the sending agent's own token. The agent sync and token rotation in `auth.ts`, and the room history reads, are HTTP calls as well. So are the gateway's own login (`POST /api/auth/login`) and the room list that `list_rooms` and WebSocket authentication fetch with the agent's token (a single `GET /api/rooms` with the agent token as bearer, no login). The diagram shows these outbound paths.
 
 ```mermaid
 flowchart TD

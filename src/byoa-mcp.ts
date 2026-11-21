@@ -91,7 +91,7 @@ function buildServerForAgent(agent: AgentInfo, token: string): McpServer {
     },
     async () => {
       try {
-        const rooms = await bridge.getAgentRooms(token, agent.username);
+        const rooms = await bridge.getAgentRooms(token);
         return {
           content: [
             {

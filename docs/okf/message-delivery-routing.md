@@ -202,14 +202,14 @@ and webhook paths update it; a plain WebSocket frame or an SSE event does
 not. `context` therefore lists messages after the last webhook or inject
 delivery to that agent in that room: at most 50, the most recent ones, in the
 order Triologue returns them, which is oldest first
-(`src/triologue-bridge.ts:318#"return data.messages || [];"`, which passes
+(`src/triologue-bridge.ts:322#"return data.messages || [];"`, which passes
 the page through unchanged;
 the messages route in the Triologue repository
 ([`server/src/routes/messages.ts`](https://github.com/LanNguyenSi/triologue/blob/91e0de030e957e5dc70d89d79c36316e64c86e7d/server/src/routes/messages.ts#L89-L97),
 lines 89 to 97) fetches newest first, takes `limit`, and reverses
 it to chronological order), without the current message, and empty on the
 first delivery in a room or when the history fetch fails
-(`src/triologue-bridge.ts:319-321#"return [];"`). Where the tracker file lives
+(`src/triologue-bridge.ts:323-325#"return [];"`). Where the tracker file lives
 is in [process-bootstrap-and-local-state.md](process-bootstrap-and-local-state.md).
 
 ## SSE replay buffer scope
