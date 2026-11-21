@@ -196,23 +196,27 @@ export class TriologueBridge {
   }
 
   /**
-   * Get rooms for an agent by logging in with their token and fetching /api/rooms.
+   * Get rooms for an agent: GET /api/rooms with the agent's own byoa_ token
+   * as bearer (no login per call). Rejects on failure with a message that
+   * carries the HTTP status or the network error code, never the token.
    */
-  async getAgentRooms(agentToken: string, username: string): Promise<Array<{ id: string; name: string }>> {
+  async getAgentRooms(agentToken: string): Promise<Array<{ id: string; name: string }>> {
     try {
-      const { data: loginData } = await axios.post(`${this.config.trioUrl}/api/auth/login`, {
-        username,
-        aiToken: agentToken,
-        userType: 'AI_AGENT',
-      });
-
       const { data: rooms } = await axios.get(`${this.config.trioUrl}/api/rooms`, {
-        headers: { Authorization: `Bearer ${loginData.token}` },
+        headers: { Authorization: `Bearer ${agentToken}` },
       });
 
       return (rooms as any[]).map(r => ({ id: r.id, name: r.name }));
-    } catch {
-      return [];
+    } catch (err) {
+      // Build the message from status/code only: axios error objects carry
+      // the request headers (and with them the token).
+      const e = err as { response?: { status?: number }; code?: string };
+      const detail = e?.response?.status !== undefined
+        ? `HTTP ${e.response.status}`
+        : e?.code
+          ? `network error ${e.code}`
+          : 'request failed';
+      throw new Error(`getAgentRooms failed: ${detail}`);
     }
   }
 

@@ -622,7 +622,13 @@ wss.on('connection', (ws) => {
       metrics.recordConnection(agent.userId, agent.name);
 
       // Fetch agent's rooms
-      const agentRooms = await bridge.getAgentRooms(event.token, agent.username);
+      let agentRooms: Array<{ id: string; name: string }> = [];
+      try {
+        agentRooms = await bridge.getAgentRooms(event.token);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : 'request failed';
+        console.warn(`⚠️ Room list for ${agent.username} unavailable (${detail}); sending auth_ok with empty rooms`);
+      }
 
       safeSend(ws, {
         type: 'auth_ok',

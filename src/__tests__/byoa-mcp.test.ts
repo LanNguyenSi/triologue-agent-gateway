@@ -146,6 +146,32 @@ describe('byoa-mcp tool dispatch', () => {
     expect(names.sort()).toEqual(['get_room_messages', 'list_rooms', 'send_message']);
   });
 
+  it('list_rooms calls bridge.getAgentRooms with the token and returns the rooms', async () => {
+    bridgeMock.getAgentRooms.mockResolvedValue([{ id: 'r1', name: 'General' }]);
+    const callRes = await mcpRequest(
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_rooms', arguments: {} } },
+      { Authorization: 'Bearer good_token' },
+    );
+    expect(callRes.status).toBe(200);
+    expect(bridgeMock.getAgentRooms).toHaveBeenCalledWith('good_token');
+    const result = (callRes.body as { result?: { isError?: boolean; content?: Array<{ text: string }> } }).result;
+    expect(result?.isError).not.toBe(true);
+    expect(JSON.parse(result?.content?.[0]?.text ?? '[]')).toEqual([{ id: 'r1', name: 'General' }]);
+  });
+
+  it('list_rooms answers isError with the failure message when getAgentRooms rejects', async () => {
+    bridgeMock.getAgentRooms.mockRejectedValue(new Error('getAgentRooms failed: HTTP 401'));
+    const callRes = await mcpRequest(
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_rooms', arguments: {} } },
+      { Authorization: 'Bearer good_token' },
+    );
+    expect(callRes.status).toBe(200);
+    const result = (callRes.body as { result?: { isError?: boolean; content?: Array<{ text: string }> } }).result;
+    expect(result?.isError).toBe(true);
+    expect(result?.content?.[0]?.text).toContain('HTTP 401');
+    expect(result?.content?.[0]?.text).not.toContain('good_token');
+  });
+
   it('send_message forwards the token + room + content to bridge.sendAsAgent', async () => {
     bridgeMock.sendAsAgent.mockResolvedValue(undefined);
     const callRes = await mcpRequest(

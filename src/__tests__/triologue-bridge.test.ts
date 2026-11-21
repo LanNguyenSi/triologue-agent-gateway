@@ -20,8 +20,9 @@
  *   M4: fetchMessagesSince stops omitting `after` when afterId is null
  *   M5: fetchMessagesSince stops catching axios errors (would throw
  *       instead of returning [])
- *   M6: getAgentRooms stops catching axios errors (would throw instead
- *       of returning [])
+ *   M6: getAgentRooms logs in again per call (axios.post is called)
+ *   M6b: getAgentRooms swallows errors again (returns [] instead of rejecting)
+ *   M6c: getAgentRooms puts the token into the thrown message
  *   M7: authenticate() stops reusing a still-valid cached JWT (would
  *       always hit /api/auth/login)
  *   M8: authenticate() stops treating an expired cached JWT as invalid
@@ -215,8 +216,7 @@ describe('fetchMessagesSince', () => {
 // ── getAgentRooms ─────────────────────────────────────────────────────────────
 
 describe('getAgentRooms', () => {
-  it('logs in as the agent and maps the room list to { id, name }', async () => {
-    axiosMocks.post.mockResolvedValue({ data: { token: 'jwt-for-agent' } });
+  it('uses the agent token as bearer without a login and maps rooms to { id, name } (M6)', async () => {
     axiosMocks.get.mockResolvedValue({
       data: [
         { id: 'r1', name: 'General', extra: 'ignored' },
@@ -225,15 +225,12 @@ describe('getAgentRooms', () => {
     });
     const bridge = makeBridge();
 
-    const rooms = await bridge.getAgentRooms('byoa_agent_tok', 'agentname');
+    const rooms = await bridge.getAgentRooms('byoa_agent_tok');
 
-    expect(axiosMocks.post).toHaveBeenCalledWith('https://trio.test/api/auth/login', {
-      username: 'agentname',
-      aiToken: 'byoa_agent_tok',
-      userType: 'AI_AGENT',
-    });
+    // MUTATION GUARD M6: reintroduce POST /api/auth/login → post is called; fails.
+    expect(axiosMocks.post).not.toHaveBeenCalled();
     expect(axiosMocks.get).toHaveBeenCalledWith('https://trio.test/api/rooms', {
-      headers: { Authorization: 'Bearer jwt-for-agent' },
+      headers: { Authorization: 'Bearer byoa_agent_tok' },
     });
     expect(rooms).toEqual([
       { id: 'r1', name: 'General' },
@@ -241,13 +238,42 @@ describe('getAgentRooms', () => {
     ]);
   });
 
-  it('catches errors (login or rooms fetch) and returns [] (M6)', async () => {
-    axiosMocks.post.mockRejectedValue(new Error('invalid credentials'));
+  it('rejects with the HTTP status and without the token on a 401 (M6b, M6c)', async () => {
+    const err = Object.assign(new Error('Request failed with status code 401'), {
+      response: { status: 401 },
+      config: { headers: { Authorization: 'Bearer byoa_agent_tok' } },
+    });
+    axiosMocks.get.mockRejectedValue(err);
     const bridge = makeBridge();
 
-    // MUTATION GUARD M6: drop the try/catch → this rejects instead of
-    // resolving []; fails.
-    await expect(bridge.getAgentRooms('byoa_agent_tok', 'agentname')).resolves.toEqual([]);
+    // MUTATION GUARD M6b: swallow the error → resolves []; fails.
+    const rejection = await bridge.getAgentRooms('byoa_agent_tok').then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(rejection).toBeInstanceOf(Error);
+    expect(rejection!.message).toContain('401');
+    // MUTATION GUARD M6c: token in the message → fails.
+    expect(rejection!.message).not.toContain('byoa_agent_tok');
+    expect(Object.values(rejection as object).join(' ')).not.toContain('byoa_agent_tok');
+  });
+
+  it('rejects with the network error code on a connection failure', async () => {
+    axiosMocks.get.mockRejectedValue(Object.assign(new Error('connect failed'), { code: 'ECONNREFUSED' }));
+    const bridge = makeBridge();
+
+    await expect(bridge.getAgentRooms('byoa_agent_tok')).rejects.toThrow(/ECONNREFUSED/);
+  });
+
+  it('rejects with a generic message when the error has neither status nor code', async () => {
+    axiosMocks.get.mockRejectedValue(new Error('boom byoa_agent_tok'));
+    const bridge = makeBridge();
+
+    const rejection = await bridge.getAgentRooms('byoa_agent_tok').then(
+      () => null,
+      (e: Error) => e,
+    );
+    expect(rejection!.message).not.toContain('byoa_agent_tok');
   });
 });
 

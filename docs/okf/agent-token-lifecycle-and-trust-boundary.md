@@ -27,9 +27,9 @@ sources:
 ## The gateway service account
 
 The bridge logs in to Triologue with `GATEWAY_USERNAME` and `GATEWAY_TOKEN`
-as an `AI_AGENT` user (`src/triologue-bridge.ts:348-352#"userType: this.config.userType,"`).
+as an `AI_AGENT` user (`src/triologue-bridge.ts:352-356#"userType: this.config.userType,"`).
 If the first connection fails, the process exits
-(`src/index.ts:713-720#"process.exit(1);"`). The same token is the bearer for
+(`src/index.ts:719-726#"process.exit(1);"`). The same token is the bearer for
 the agent sync (`src/auth.ts:65-69#"signal: AbortSignal.timeout(5000),"`) and for
 token rotation (`src/auth.ts:236-242#"'X-Agent-Token': currentToken,"`). Triologue
 accepts those two calls only from its reserved service-account usernames; the
@@ -116,7 +116,7 @@ different times:
   the token against the in-memory index on each request, which lags until
   the next successful sync. A WebSocket checks it only once, at `auth`, and
   later `message` events reuse the token stored then
-  (`src/index.ts:663-664#"await bridge.sendAsAgent(token, event.room, event.content, thread.threadId);"`).
+  (`src/index.ts:669-670#"await bridge.sendAsAgent(token, event.room, event.content, thread.threadId);"`).
   `sendAsAgent` then posts to
   `/api/agents/message` with the agent's own token
   (`src/triologue-bridge.ts:189#"/api/agents/message"`), and Triologue checks
@@ -125,7 +125,7 @@ different times:
   (`src/byoa-sse.ts:265-267#"return res.status(502).json({ error: 'Failed to deliver message', detail: err.message });"`),
   500 on `POST /send` (`src/index.ts:396-397#"res.status(500).json({ error: err.message });"`)
   and a `SEND_FAILED` frame on WebSocket
-  (`src/index.ts:670-671#"code: 'SEND_FAILED'"`).
+  (`src/index.ts:676-677#"code: 'SEND_FAILED'"`).
 - Presence. The gateway itself posts to `/api/agents/me/presence` with an
   agent's current token, taken from the index by user id
   (`src/index.ts:108#"tokenForAgent: (agentId) => getCurrentTokenForAgent(agentId),"`,

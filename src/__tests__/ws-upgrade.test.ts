@@ -232,6 +232,26 @@ describe('WebSocket upgrade routing on /byoa/ws', () => {
     await closed(ws);
   });
 
+  it('a rejected room lookup still yields auth_ok with an empty rooms list', async () => {
+    mocks.getAgentRooms.mockRejectedValueOnce(new Error('getAgentRooms failed: HTTP 401'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const ws = connect('/byoa/ws');
+    await opened(ws);
+    ws.send(JSON.stringify({ type: 'auth', token: VALID_TOKEN }));
+
+    const frame = (await nextFrame(ws)) as { type: string; rooms: unknown[] };
+    expect(frame.type).toBe('auth_ok');
+    expect(frame.rooms).toEqual([]);
+    const logged = warn.mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(logged).toContain(AGENT.username);
+    expect(logged).toContain('HTTP 401');
+    expect(logged).not.toContain(VALID_TOKEN);
+    warn.mockRestore();
+
+    ws.close();
+    await closed(ws);
+  });
+
   it('a connection to /byoa/ws with an invalid token is refused with an auth_error frame and close code 4003', async () => {
     const ws = connect('/byoa/ws');
     await opened(ws);
